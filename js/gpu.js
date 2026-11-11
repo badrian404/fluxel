@@ -197,6 +197,8 @@ void main() {
   }
   u = uw > 0.0 ? u / uw : 0.0;
   v = vw > 0.0 ? v / vw : 0.0;
+  if (!(abs(u) < 1e4)) u = 0.0;
+  if (!(abs(v) < 1e4)) v = 0.0;
   float u0 = u, v0 = v;
   if (f.x < CW && f.y >= 1 && f.y < CH && (kindAt(f - ivec2(0, 1)) == 1.0 || kindAt(f) == 1.0)) v += uG;
   if (f.y >= CH || f.x == 0 || f.x >= CW || kindAt(f - ivec2(1, 0)) == 2.0 || kindAt(f) == 2.0) u = 0.0;
@@ -249,7 +251,8 @@ void main() {
     sum += texelFetch(uP, n, 0).x; cnt += 1.0;
   }
   float p = texelFetch(uP, c, 0).x;
-  o = vec4(cnt > 0.0 ? max(uLo, mix(p, (sum - kr.y) / cnt, uOmega)) : 0.0, 0.0, 0.0, 0.0);
+  float pn = cnt > 0.0 ? max(uLo, mix(p, (sum - kr.y) / cnt, uOmega)) : 0.0;
+  o = vec4(abs(pn) < 1e6 ? pn : 0.0, 0.0, 0.0, 0.0);
 }`;
   const FS_RESID = MG_HEAD + `
 uniform sampler2D uP;
@@ -344,8 +347,10 @@ void main() {
   if (id == 0) t += (20.0 - t) * 0.015;
   B.x = t;
 
-  // Velocities.
+  // Velocities. A bad value (NaN or infinity, from a driver or a wild brush stroke) would spread
+  // through the pressure grid and freeze liquid in place, so it is reset here.
   vec2 v = B.yz;
+  if (!(abs(v.x) < 1e4) || !(abs(v.y) < 1e4)) v = vec2(0.0);
   if (st == ST_LIQUID) {
     ivec2 c = p / SC;
     vec2 fr = (vec2(p - c * SC) + 0.5) / float(SC);

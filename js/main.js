@@ -147,7 +147,9 @@
     const steps = Math.max(1, Math.ceil(dist / Math.max(1, brush * 0.5)));
     for (let k = 1; k <= steps; k++) {
       const x = Math.round(a.x + (dx * k) / steps), y = Math.round(a.y + (dy * k) / steps);
-      world.paint(x, y, brush, el, dx, dy, replace);
+      // Stroke speed gives what is painted a push, capped so a fast swipe cannot fling it.
+      const sp = Math.hypot(dx, dy), k2 = sp > 12 ? 12 / sp : 1;
+      world.paint(x, y, brush, el, dx * k2, dy * k2, replace);
     }
   }
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
