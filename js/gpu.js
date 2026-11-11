@@ -204,18 +204,41 @@ void main() {
   o = vec4(u, v, u0, v0);
 }`;
 
+  // Open air: 1 at the top of the world, spread along rows and columns of air cells, fading a little
+  // with every hop. Air sealed in by liquid and walls (a bubble in a pipe) fades to 0 within a few steps.
+  const FS_OPEN = `
+uniform sampler2D uK;
+uniform sampler2D uO;
+uniform ivec2 uAxis;
+out vec4 o;
+void main() {
+  ivec2 c = ivec2(gl_FragCoord.xy);
+  if (texelFetch(uK, c, 0).x != 0.0) { o = vec4(0.0); return; }
+  if (c.y == 0) { o = vec4(1.0, 0.0, 0.0, 0.0); return; }
+  float m = texelFetch(uO, c, 0).x;
+  for (int s = -1; s <= 1; s += 2) for (int j = 1; j <= 48; j++) {
+    ivec2 q = c + uAxis * (j * s);
+    if (q.x < 0 || q.y < 0 || q.x >= CW || q.y >= CH || texelFetch(uK, q, 0).x != 0.0) break;
+    m = max(m, texelFetch(uO, q, 0).x);
+  }
+  o = vec4(m * 0.96, 0.0, 0.0, 0.0);
+}`;
+
   const FS_DIV = `
 uniform sampler2D uK;
 uniform sampler2D uF;
+uniform sampler2D uO;
 uniform float uFill;
 out vec4 o;
 float kindAt(ivec2 c) { return texelFetch(uK, c, 0).x; }
 void main() {
   ivec2 c = ivec2(gl_FragCoord.xy);
   vec4 k = texelFetch(uK, c, 0);
-  if (k.x != 1.0) { o = vec4(k.x, 0.0, 0.0, 0.0); return; }
   vec4 f = texelFetch(uF, c, 0);
   float d = texelFetch(uF, c + ivec2(1, 0), 0).x - f.x + texelFetch(uF, c + ivec2(0, 1), 0).y - f.y;
+  // Sealed air (a bubble) carries pressure like the liquid around it, so it does not act as a drain.
+  if (k.x == 0.0 && texelFetch(uO, c, 0).x < 0.08) { o = vec4(1.0, d, 0.0, 0.0); return; }
+  if (k.x != 1.0) { o = vec4(k.x, 0.0, 0.0, 0.0); return; }
   // Under-filled interior cells pull their neighbours in, closing holes in the bulk.
   float room = k.w - k.z;
   if (room > 0.0 && k.y < room &&
@@ -360,8 +383,11 @@ void main() {
       if (e0.w > 0.0) v *= 1.0 - 0.25 * e0.w;
       v = clamp(v, -uMaxV, uMaxV);
     }
-    if (v.y < 0.0) {
-      v.y *= 0.97; // air drag on upward motion
+    // At a free surface (air above), drag and wall friction on upward motion stop liquid creeping up
+    // walls. Liquid pushed up a full pipe by pressure keeps its speed.
+    bool openAbove = nid[3] >= 0 && stOf(nid[3]) == ST_EMPTY;
+    if (v.y < 0.0 && openAbove) {
+      v.y *= 0.97;
       bool wallL = nid[1] < 0 || stOf(nid[1]) == ST_STATIC, wallR = nid[0] < 0 || stOf(nid[0]) == ST_STATIC;
       if (wallL || wallR) v.y *= 0.85; // and wall friction, so liquid does not creep up walls
     }
@@ -657,15 +683,17 @@ void main() {
   oB = vec4(cB[c].x, vel[c], cB[c].w);
 }`;
 
-  // Bulk flow: a run of up to RUN liquid cells (or falling grains) slides one cell along uDir
-  // into the empty cell at its front, as one piece. Block moves alone can only move liquid at its
-  // surface; this lets a whole column fall or a whole layer flow, so the bulk keeps up with the solver.
+  // Bulk flow: a run of up to RUN liquid cells (or falling grains) slides up to MAXM cells along uDir
+  // into the empty cells at its front, as one piece; the empty cells move to the back of the run.
+  // Block moves alone can only move liquid at its surface; this lets a whole column fall, a layer
+  // flow or a pipe run full, so the bulk keeps up with the pressure solver.
   const FS_SHIFT = STATE_OUT + `
 uniform usampler2D uMask;
 uniform ivec2 uDir;
 uniform float uPer; // shift passes per step in this direction
 uniform int uSub;
 #define RUN 12
+#define MAXM 3
 bool runner(ivec2 q) {
   if (!inside(q) || texelFetch(uMask, q, 0).r > 0u) return false;
   int s = stOf(int(texelFetch(uA, q, 0).x));
@@ -678,28 +706,99 @@ bool hole(ivec2 q) {
 void main() {
   ivec2 p = ivec2(gl_FragCoord.xy);
   oA = texelFetch(uA, p, 0); oB = texelFetch(uB, p, 0);
-  // Find the empty cell e at the front of the run this cell belongs to.
-  ivec2 e = ivec2(-1); int d = 0;
+  // e: the first empty cell in front of the run this cell belongs to; pos: this cell's place relative to e.
+  ivec2 e = ivec2(-1); int pos = 0;
   if (runner(p)) {
     for (int j = 1; j <= RUN; j++) {
       ivec2 q = p + uDir * j;
       if (runner(q)) continue;
-      if (hole(q)) { e = q; d = j; }
+      if (hole(q)) { e = q; pos = -j; }
       break;
     }
-  } else if (hole(p) && runner(p - uDir)) { e = p; d = 0; }
+  } else if (hole(p)) {
+    for (int k = 0; k < MAXM; k++) {
+      ivec2 q = p - uDir * (k + 1);
+      if (runner(q)) { e = p - uDir * k; pos = k; break; }
+      if (!hole(q)) break;
+    }
+  }
   if (e.x < 0) return;
+  int hc = 0;
+  for (int k = 0; k < MAXM; k++) { if (!hole(e + uDir * k)) break; hc++; }
   ivec2 f = e - uDir;
-  int fid = int(texelFetch(uA, f, 0).x);
-  vec4 fe = el(fid, 0);
+  vec4 fe = el(int(texelFetch(uA, f, 0).x), 0);
   float sp = dot(texelFetch(uB, f, 0).yz, vec2(uDir));
   if (uDir.y > 0) sp += int(fe.x) == ST_POWDER ? 1.0 : 0.5;
-  float pm = clamp(sp / uPer * (1.0 - 0.75 * fe.w), 0.0, 1.0);
-  if (rnd3(e, 90 + uSub).x >= pm) return;
-  ivec2 src = e;
-  if (d == 0) src = f;
-  else if (d < RUN && runner(p - uDir)) src = p - uDir;
+  sp = clamp(sp / uPer * (1.0 - 0.75 * fe.w), 0.0, float(MAXM));
+  int m = min(hc, int(floor(sp + rnd3(e, 90 + uSub).x)));
+  if (m <= 0 || pos >= m) return;
+  // Is the cell m behind this one still part of the same run (and inside the window)?
+  bool ok = pos - m >= -RUN;
+  for (int j = 1; j <= MAXM && ok; j++) {
+    if (j > m) break;
+    int q = pos - j;
+    if (q < 0 && !runner(e + uDir * q)) ok = false;
+  }
+  ivec2 src;
+  if (ok) src = e + uDir * (pos - m);
+  else {
+    // One of the m cells at the back of the window: it takes one of the empty cells.
+    int st = -RUN;
+    for (int j = 1; j <= MAXM; j++) {
+      if (j > m) break;
+      int q = pos - j;
+      if (q >= 0) continue;
+      if (q < -RUN) break;
+      if (!runner(e + uDir * q)) { st = max(st, q + 1); break; }
+    }
+    src = e + uDir * (pos - st);
+  }
   oA = texelFetch(uA, src, 0); oB = texelFetch(uB, src, 0);
+}`;
+
+  // Displacement: liquid trapped inside an object (pushed up to its top) swaps places with the
+  // air above the column of liquid over it, so a sunken object raises the water level by its volume.
+  const FS_LIFT = STATE_OUT + `
+uniform usampler2D uMask;
+uniform vec4 uCols[32]; // x0, x1, lowest row of the object
+uniform int uNC;
+#define LIFT 128
+bool masked(ivec2 q) { return texelFetch(uMask, q, 0).r > 0u; }
+bool liq(ivec2 q) { return inside(q) && !masked(q) && stOf(int(texelFetch(uA, q, 0).x)) == ST_LIQUID; }
+bool pump(ivec2 q) { return inside(q) && masked(q) && stOf(int(texelFetch(uA, q, 0).x)) == ST_LIQUID && liq(q - ivec2(0, 1)); }
+bool hole(ivec2 q) { return inside(q) && !masked(q) && stOf(int(texelFetch(uA, q, 0).x)) == ST_EMPTY; }
+void main() {
+  ivec2 p = ivec2(gl_FragCoord.xy);
+  oA = texelFetch(uA, p, 0); oB = texelFetch(uB, p, 0);
+  bool col = false;
+  for (int k = 0; k < 32; k++) {
+    if (k >= uNC) break;
+    if (float(p.x) >= uCols[k].x && float(p.x) <= uCols[k].y && float(p.y) <= uCols[k].z) { col = true; break; }
+  }
+  if (!col) return;
+  ivec2 pu = ivec2(-1), ho = ivec2(-1);
+  if (pump(p)) pu = p;
+  else if (liq(p) || hole(p)) {
+    for (int j = 1; j <= LIFT; j++) {
+      ivec2 q = p + ivec2(0, j);
+      if (liq(q)) continue;
+      if (pump(q)) pu = q;
+      break;
+    }
+    if (pu.x >= 0 && hole(p)) ho = p;
+  }
+  if (pu.x < 0) return;
+  if (ho.x < 0) {
+    for (int j = 1; j <= LIFT; j++) {
+      ivec2 q = pu - ivec2(0, j);
+      if (liq(q)) continue;
+      if (hole(q)) ho = q;
+      break;
+    }
+  }
+  if (ho.x < 0 || p.y < ho.y) return;
+  oA = texelFetch(uA, p == pu ? ho : p + ivec2(0, 1), 0);
+  oB = texelFetch(uB, p == pu ? ho : p + ivec2(0, 1), 0);
 }`;
 
   // Beams move one cell per pass in a straight line and act on what they hit.
@@ -976,6 +1075,9 @@ void main() {
       this.Fv = T(cw + 1, ch + 1, ...RGBA32F); this.fFbo = F([this.Fv]);
       this.Fp = T(cw + 1, ch + 1, ...RGBA32F); this.fpFbo = F([this.Fp]);
       this.D = T(cw, ch, ...RGBA32F); this.dFbo = F([this.D]);
+      this.O = [0, 1].map(() => T(cw, ch, ...RGBA32F));
+      this.oFbo = this.O.map((t) => F([t]));
+      this.oc = 0;
       // Multigrid levels: level 0 is the solver grid, each next one half the size.
       this.levels = [];
       for (let w = cw, h = ch, l = 0; ; l++) {
@@ -996,8 +1098,8 @@ void main() {
       head += COMMON;
       const P = (src) => { const x = makeProgram(gl, head + src); res.prog.push(x.p); return x; };
       this.prog = {
-        kind: P(FS_KIND), p2g: P(FS_P2G), div: P(FS_DIV), smooth: P(FS_SMOOTH), resid: P(FS_RESID), restrict: P(FS_RESTRICT), prolong: P(FS_PROLONG), project: P(FS_PROJECT),
-        physics: P(FS_PHYSICS), move: P(FS_MOVE), shift: P(FS_SHIFT), beam: P(FS_BEAM), brush: P(FS_BRUSH),
+        kind: P(FS_KIND), p2g: P(FS_P2G), div: P(FS_DIV), open: P(FS_OPEN), smooth: P(FS_SMOOTH), resid: P(FS_RESID), restrict: P(FS_RESTRICT), prolong: P(FS_PROLONG), project: P(FS_PROJECT),
+        physics: P(FS_PHYSICS), move: P(FS_MOVE), shift: P(FS_SHIFT), lift: P(FS_LIFT), beam: P(FS_BEAM), brush: P(FS_BRUSH),
         edit: P(FS_EDIT), clear: P(FS_CLEAR), render: P(FS_RENDER),
       };
 
@@ -1078,11 +1180,28 @@ void main() {
       for (let k = 0; k < MOVES; k++) {
         const o = (k + this.frame) & 1;
         this.statePass(this.prog.move, { uOff: [o, o], uPass: k });
-        // Runs slide down twice per step and up once (pressure pushing liquid up a pipe), sideways three times.
-        if (k % 2 === 0) this.statePass(this.prog.shift, { uDir: [0, k === 2 ? -1 : 1], uPer: k === 2 ? 1 : 2, uSub: k });
-        else this.statePass(this.prog.shift, { uDir: [((k >> 1) + this.frame) & 1 ? 1 : -1, 0], uPer: MOVES / 4, uSub: k });
+        this.shiftPass(k);
       }
+      this.shiftPass(6); this.shiftPass(7);
+      if (this.bodies.length) this.liftPass();
       if (this.bodies.length) this.issueReadback();
+    }
+
+    // Runs of liquid slide twice per step in each direction (down, right, up, left, in turn).
+    shiftPass(k) {
+      const flip = this.frame & 1 ? 1 : -1;
+      const dir = [[0, 1], [flip, 0], [0, -1], [-flip, 0]][k & 3];
+      this.statePass(this.prog.shift, { uDir: dir, uPer: 2, uSub: k });
+    }
+
+    liftPass() {
+      const cols = new Float32Array(32 * 4);
+      const n = Math.min(32, this.bodies.length);
+      for (let k = 0; k < n; k++) {
+        const b = this.bodies[k], s = b.sh;
+        cols.set([b.x + s.minX, b.x + s.maxX, b.y + s.maxY, 0], k * 4);
+      }
+      for (let r = 0; r < 2; r++) this.statePass(this.prog.lift, { uCols: cols, uNC: n });
     }
 
     fluidStep() {
@@ -1090,10 +1209,15 @@ void main() {
       const A = this.A[this.cur], B = this.B[this.cur];
       this.run(prog.kind, this.kFbo, cw, ch, { uA: A, uMask: this.maskTex });
       this.run(prog.p2g, this.fFbo, cw + 1, ch + 1, { uA: A, uB: B, uMask: this.maskTex, uK: this.K, uG: this.gravity });
-      this.run(prog.div, this.dFbo, cw, ch, { uK: this.K, uF: this.Fv, uFill: this.fillPull });
+      for (let k = 0; k < 6; k++) {
+        const n = 1 - this.oc;
+        this.run(prog.open, this.oFbo[n], cw, ch, { uK: this.K, uO: this.O[this.oc], uAxis: k & 1 ? [1, 0] : [0, 1] });
+        this.oc = n;
+      }
+      this.run(prog.div, this.dFbo, cw, ch, { uK: this.K, uF: this.Fv, uO: this.O[this.oc], uFill: this.fillPull });
       for (let k = 0; k < this.vcycles; k++) this.vcycle(0);
       const L0 = this.levels[0];
-      this.run(prog.project, this.fpFbo, cw + 1, ch + 1, { uK: this.K, uF: this.Fv, uP: L0.p[L0.pc] });
+      this.run(prog.project, this.fpFbo, cw + 1, ch + 1, { uK: this.D, uF: this.Fv, uP: L0.p[L0.pc] });
     }
 
     smooth(L, n, omega) {
@@ -1144,6 +1268,7 @@ void main() {
       this.dabs.length = 0;
       this.edit = null;
       this.run(this.prog.clear, this.fbo[this.cur], this.W, this.H, {});
+      for (const f of this.oFbo) { gl.bindFramebuffer(gl.FRAMEBUFFER, f); gl.clearBufferfv(gl.COLOR, 0, [1, 0, 0, 0]); }
       for (const L of this.levels) for (const f of L.pFbo) { gl.bindFramebuffer(gl.FRAMEBUFFER, f); gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, 0]); }
     }
 
