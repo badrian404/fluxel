@@ -524,7 +524,8 @@ float pBase(int c, float dir) { return movableSt(cst[c]) ? clamp(vel[c].x * dir 
 float pDisp(int c, bool pressed) {
   int s = cst[c];
   if (s == ST_LIQUID) return (1.0 - 0.9 * cvis[c]) * (pressed ? 0.95 : abs(vel[c].y) < 1.0 ? 0.5 : 0.1);
-  if (s == ST_GAS || s == ST_FIRE) return 0.25;
+  // Gas held under a ceiling (or under other gas) spreads out flat instead of heaping up.
+  if (s == ST_GAS || s == ST_FIRE) return pressed ? 0.95 : 0.25;
   return 0.0;
 }
 // Can content s take the place of content d, moving vertically by dy?
@@ -558,6 +559,8 @@ bool canEnterH(int s, int d, float r) {
   if (ss == ST_GAS || ss == ST_FIRE) return (sd == ST_GAS || sd == ST_FIRE) && cid[s] != cid[d] && r < 0.25;
   return false;
 }
+
+bool capped(ivec2 q) { return !inside(q) || stOf(int(texelFetch(uA, q, 0).x)) != ST_EMPTY; }
 
 void main() {
   ivec2 p = ivec2(gl_FragCoord.xy);
@@ -647,6 +650,9 @@ void main() {
     // pressed: top row resting on something, bottom row with liquid above it.
     bool pl = row == 0 ? !emptyLike(perm[2]) && !gasLike(perm[2]) : cst[perm[0]] == ST_LIQUID;
     bool pr = row == 0 ? !emptyLike(perm[3]) && !gasLike(perm[3]) : cst[perm[1]] == ST_LIQUID;
+    // For gas it is the other way up: pressed against what is above it.
+    if (gasLike(cl)) pl = row == 1 ? !emptyLike(perm[0]) : capped(o + ivec2(0, -1));
+    if (gasLike(cr)) pr = row == 1 ? !emptyLike(perm[1]) : capped(o + ivec2(1, -1));
     bool wl = rr < bl + pDisp(cl, pl) * 0.5, wr = (1.0 - rr) < br + pDisp(cr, pr) * 0.5;
     if (wl && canEnterH(cl, cr, rr2)) { swapPos(L, R); continue; }
     if (wr && canEnterH(cr, cl, rr2)) { swapPos(L, R); continue; }

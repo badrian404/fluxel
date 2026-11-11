@@ -309,7 +309,10 @@
       this.ax[i] = ax - tx; this.ay[i] = ay - ty;
       if (tx !== 0 || ty !== 0) { this.travel(i, x, y, tx, ty, st); return; }
       const s = rnd() < 0.5 ? 1 : -1;
-      if (rnd() < 0.3) this.tryStep(i, x, y, s, 0);
+      // Gas held under a ceiling (or under other gas) spreads out flat instead of heaping up.
+      const capped = y === 0 || this.type[i - this.W] !== 0;
+      if (capped) { let j = this.tryStep(i, x, y, s, 0); if (j >= 0 && rnd() < 0.7) this.tryStep(j, x + s, y, s, 0); }
+      else if (rnd() < 0.3) this.tryStep(i, x, y, s, 0);
     }
 
     // ---------- the step ----------
