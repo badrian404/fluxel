@@ -68,6 +68,8 @@
     return { cells, minX, maxX, minY, maxY, rows: [...rows.values()] };
   }
 
+  FX.objectShape = shape;
+
   const W_ = FX.World.prototype;
 
   W_.initBodies = function () {

@@ -19,10 +19,24 @@
     set(k, v) { try { localStorage.setItem('fluxel.' + k, v); } catch (e) { /* private mode */ } },
   };
 
+  // GPU presets: the shaders handle far more cells than the CPU engine.
+  const GPU_CELLS = { low: 100000, medium: 200000, high: 400000, ultra: 800000 };
+
   const $ = (s) => document.querySelector(s);
   const canvas = $('#screen');
   const stage = $('#stage');
-  const renderer = new FX.Renderer(canvas);
+
+  // Engine: GPU (WebGL2) when the browser supports it, else the CPU engine.
+  let engine = store.get('engine') === 'cpu' ? 'cpu' : 'gpu';
+  let gl = null;
+  if (engine === 'gpu' && FX.GPU && FX.GPU.supported()) gl = FX.GPU.context(canvas);
+  if (!gl) engine = 'cpu';
+  const renderer = engine === 'cpu' ? new FX.Renderer(canvas) : null;
+  let view = 'normal';
+  if (gl) {
+    canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); });
+    canvas.addEventListener('webglcontextrestored', () => location.reload());
+  }
 
   let world = null;
   let layout = { ox: 0, oy: 0, w: 1, h: 1, scale: 1 };
@@ -54,10 +68,11 @@
   function createWorld() {
     let key = qualityKey;
     if (key === 'auto') {
-      if (!autoPick) autoPick = benchmark();
+      if (!autoPick) autoPick = engine === 'gpu' ? { pick: 'ultra' } : benchmark();
       key = autoPick.pick;
     }
-    const q = QUALITY[key];
+    const q = Object.assign({}, QUALITY[key]);
+    if (engine === 'gpu' && GPU_CELLS[key]) q.cells = GPU_CELLS[key];
     let W, H;
     if (q.w) { W = q.w; H = q.h; } // exact pixel size, letterboxed to fit the screen
     else {
@@ -68,9 +83,14 @@
       W = Math.max(60, Math.round(Math.sqrt(cells * aspect)));
       H = Math.max(40, Math.round(cells / W));
     }
-    world = new FX.World(W, H);
+    if (engine === 'gpu') {
+      if (world && world.dispose) world.dispose();
+      world = new FX.GPUWorld(gl, W, H);
+    } else {
+      world = new FX.World(W, H);
+      renderer.resize(world);
+    }
     setBrush(Math.max(2, Math.round(Math.max(W, H) / 64)));
-    renderer.resize(world);
     fit();
     updateInfo();
   }
@@ -178,7 +198,7 @@
 
   // ---------- toolbar ----------
   function togglePause() { paused = !paused; $('#pause').textContent = paused ? 'Play' : 'Pause'; $('#pause').classList.toggle('on', paused); }
-  function toggleView() { renderer.view = renderer.view === 'heat' ? 'normal' : 'heat'; $('#view').classList.toggle('on', renderer.view === 'heat'); }
+  function toggleView() { view = view === 'heat' ? 'normal' : 'heat'; if (renderer) renderer.view = view; $('#view').classList.toggle('on', view === 'heat'); }
   function toggleReplace() { replace = !replace; $('#replace').classList.toggle('on', replace); }
   $('#pause').onclick = togglePause;
   $('#step').onclick = () => { stepOnce = true; };
@@ -188,6 +208,11 @@
   $('#demo').onclick = () => demo();
   $('#brush').oninput = (e) => setBrush(+e.target.value);
   const qSel = $('#quality');
+  const eSel = $('#engine');
+  eSel.value = engine;
+  if (!gl && !(FX.GPU && FX.GPU.supported())) { const o = eSel.querySelector('option[value="gpu"]'); o.disabled = true; o.textContent = 'GPU (not supported)'; }
+  eSel.onchange = () => { store.set('engine', eSel.value); location.reload(); };
+  if (engine === 'gpu') for (const o of qSel.options) o.textContent = o.textContent.replace(' (heavy)', '');
   qSel.onchange = () => {
     qualityKey = qSel.value; store.set('quality', qualityKey);
     createWorld(); demo();
@@ -197,6 +222,7 @@
     if (!world) return;
     const q = qualityKey === 'auto' ? 'Auto: ' + QUALITY[autoPick.pick].label : QUALITY[qualityKey].label;
     $('#grid').textContent = world.W + '×' + world.H + ' (' + q + ')';
+    $('#grid').title = engine === 'gpu' ? 'Simulated on the GPU' : 'Simulated on the CPU';
   }
 
   // ---------- demo scene: a dam break ----------
@@ -245,16 +271,20 @@
     } else if (stepOnce) { world.step(); }
     stepOnce = false;
     simMs = simMs * 0.9 + (performance.now() - t0) * 0.1;
-    renderer.draw(world, layout);
+    if (renderer) renderer.draw(world, layout);
+    else world.draw(layout, view);
     frames++;
     if (now - fpsT > 500) {
-      $('#fps').textContent = Math.round((frames * 1000) / (now - fpsT)) + ' fps · sim ' + simMs.toFixed(1) + ' ms · ' + world.count + ' px';
+      const fps = Math.round((frames * 1000) / (now - fpsT));
+      $('#fps').textContent = engine === 'gpu' ? fps + ' fps · GPU' : fps + ' fps · sim ' + simMs.toFixed(1) + ' ms · ' + world.count + ' px';
       frames = 0; fpsT = now;
       if (hover) {
         const x = Math.floor(hover.x), y = Math.floor(hover.y);
         if (x >= 0 && y >= 0 && x < world.W && y < world.H) {
-          const i = y * world.W + x;
-          $('#hover').textContent = EL[world.type[i]].label + ' ' + Math.round(world.temp[i]) + '°C';
+          let id, t;
+          if (world.probe) { const c = world.probe(x, y); id = c.id; t = c.temp; }
+          else { const i = y * world.W + x; id = world.type[i]; t = world.temp[i]; }
+          $('#hover').textContent = EL[id].label + ' ' + Math.round(t) + '°C';
         }
       } else $('#hover').textContent = '';
     }
@@ -275,5 +305,5 @@
   if (window.ResizeObserver) new ResizeObserver(() => fit()).observe(stage);
   else window.addEventListener('resize', fit);
   requestAnimationFrame(frame);
-  FX.debug = { get world() { return world; }, benchmark };
+  FX.debug = { get world() { return world; }, benchmark, engine };
 })();

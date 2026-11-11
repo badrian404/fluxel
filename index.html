@@ -20,6 +20,12 @@
       <label class="brush" title="Brush size ([ and ], or mouse wheel)">Brush
         <input id="brush" type="range" min="0" max="80" value="4"><span id="brushVal">5</span>
       </label>
+      <label class="quality" title="Simulation engine">
+        <select id="engine">
+          <option value="gpu">GPU</option>
+          <option value="cpu">CPU</option>
+        </select>
+      </label>
       <label class="quality" title="Simulation resolution">
         <select id="quality">
           <option value="auto">Auto</option>
@@ -46,6 +52,7 @@
   <script src="js/sim.js"></script>
   <script src="js/bodies.js"></script>
   <script src="js/render.js"></script>
+  <script src="js/gpu.js"></script>
   <script src="js/main.js"></script>
 </body>
 </html>
