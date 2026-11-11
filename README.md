@@ -18,6 +18,13 @@ Play it by opening `index.html` (no build step), or host the folder on GitHub Pa
 - **Rendering** (`js/render.js`): one pixel buffer per frame, scaled to the screen. Heat view shows temperature.
 - **Quality**: "Auto" runs a short benchmark on first load and picks a grid size the device can run at 60 fps.
 
+## Elements
+
+Powders, liquids, solids, gases, energy (fire, plasma, laser, freeze ray, lightning), food that cooks,
+melts and mixes (flour + water makes dough, dough bakes into bread, sugar caramelises, popcorn pops),
+and special blocks: cloner, drain (removes liquids), void (removes anything that moves), heater and cooler.
+Laser and freeze ray shoot in the direction you drag; lightning strikes downward.
+
 ## Controls
 
 | Input | Action |

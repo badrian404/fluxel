@@ -3,7 +3,7 @@
   'use strict';
   const FX = (window.FX = window.FX || {});
   const { S, EL, ID, RX, NEL } = FX;
-  const EMPTY = S.EMPTY, STATIC = S.STATIC, POWDER = S.POWDER, LIQUID = S.LIQUID, GAS = S.GAS, FIRE = S.FIRE;
+  const EMPTY = S.EMPTY, STATIC = S.STATIC, POWDER = S.POWDER, LIQUID = S.LIQUID, GAS = S.GAS, FIRE = S.FIRE, BEAM = S.BEAM;
   const AMBIENT = 20;
   const rnd = Math.random;
   const pick = (v) => (Array.isArray(v) ? v[(rnd() * v.length) | 0] : v);
@@ -42,7 +42,7 @@
         this.loT[e.id] = e.loT == null ? -Infinity : e.loT;
       }
       this.fixed = new Uint8Array(NEL); // cannot be pushed or destroyed by explosions
-      for (const k of ['wall', 'cloner', 'drain', 'heater', 'cooler']) this.fixed[ID[k]] = 1;
+      for (const k of ['wall', 'cloner', 'drain', 'void', 'heater', 'cooler']) this.fixed[ID[k]] = 1;
 
       const scale = Math.max(2, Math.round(W / 110));
       this.fluid = new FX.Fluid(W, H, scale);
@@ -69,7 +69,12 @@
     change(i, id) {
       const vx = this.vx[i], vy = this.vy[i], t = this.temp[i];
       this.set(i, id);
-      if (id !== 0) { this.temp[i] = t; if (this.stateOf[id] !== STATIC) { this.vx[i] = vx; this.vy[i] = vy; } }
+      if (id !== 0) {
+        this.temp[i] = t;
+        if (this.stateOf[id] !== STATIC) { this.vx[i] = vx; this.vy[i] = vy; }
+        const pop = EL[id].pop;
+        if (pop) { this.vy[i] = -pop * (0.6 + rnd() * 0.8); this.vx[i] = (rnd() - 0.5) * pop; }
+      }
     }
 
     swap(i, j) {
@@ -92,7 +97,8 @@
       if (b === 0) return true;
       const a = this.type[i];
       const sa = this.stateOf[a], sb = this.stateOf[b];
-      if (sb === STATIC) return false;
+      if (sb === EMPTY) return true; // beam glow
+      if (sb === STATIC || sb === BEAM) return false;
       const da = this.densOf[a], db = this.densOf[b];
       if (sa === POWDER) {
         if (sb === LIQUID) return dy > 0 && da > db && rnd() < 0.3;
@@ -313,6 +319,52 @@
           this.updateGas(i, x, y, st);
         }
       }
+      // Beams.
+      for (let i = 0; i < this.N; i++) {
+        if (stateOf[type[i]] !== BEAM || stamp[i] === cur) continue;
+        stamp[i] = cur;
+        this.moveBeam(i);
+      }
+    }
+
+    // Beams travel fast in a straight line and act on the first thing they hit.
+    moveBeam(i) {
+      const W = this.W, H = this.H, a = this.type[i], e = EL[a];
+      const bolt = a === ID.lightning;
+      let vx = this.vx[i], vy = this.vy[i];
+      if (bolt) vx = (rnd() - 0.5) * 3; // lightning zigzags down
+      const n = Math.max(1, Math.ceil(Math.max(Math.abs(vx), Math.abs(vy))));
+      let fx = (i % W) + 0.5 + this.ax[i], fy = ((i / W) | 0) + 0.5 + this.ay[i];
+      let ci = i;
+      for (let k = 0; k < n; k++) {
+        fx += vx / n; fy += vy / n;
+        const nx = Math.floor(fx), ny = Math.floor(fy);
+        const cx = ci % W, cy = (ci / W) | 0;
+        if (nx === cx && ny === cy) continue;
+        if (nx < 0 || nx >= W || ny < 0 || ny >= H) { this.set(ci, 0); return; }
+        const j = ny * W + nx, b = this.type[j];
+        if (b === 0 || this.stateOf[b] === EMPTY || this.stateOf[b] === BEAM) {
+          this.swap(ci, j);
+          if (e.trail >= 0) { this.set(ci, e.trail); this.stamp[ci] = this.cur; } else this.set(ci, 0);
+          ci = j;
+          continue;
+        }
+        // Hit.
+        if (a === ID.laser) {
+          this.temp[j] = Math.min(4000, this.temp[j] + 350);
+          if (EL[b].burn > 0 && this.burn[j] === 0) this.ignite(j, nx, ny);
+        } else if (a === ID.freeze_ray) {
+          this.temp[j] = Math.max(-273, this.temp[j] - 180);
+          if (this.burn[j] > 0) this.burn[j] = 0;
+        } else if (bolt) {
+          this.temp[j] = Math.min(6000, this.temp[j] + 2500);
+          if (EL[b].burn > 0 && this.burn[j] === 0) this.ignite(j, nx, ny);
+          if (!this.fixed[b] && this.stateOf[b] !== LIQUID) { this.set(j, ID.plasma); }
+        }
+        this.set(ci, 0);
+        return;
+      }
+      this.ax[ci] = fx - Math.floor(fx) - 0.5; this.ay[ci] = fy - Math.floor(fy) - 0.5;
     }
 
     heatPass() {
@@ -458,8 +510,14 @@
                 this.set(j, held);
                 if (r === 2) this.vy[j] = 0.5;
               }
-            } else if (a === ID.drain) {
-              if (b !== 0 && !this.fixed[b] && stateOf[b] !== STATIC) this.set(j, 0);
+            } else if (a === ID.drain || a === ID.void) {
+              // Swallow from every side: Drain takes liquids, Void takes anything that moves.
+              for (let q = 0; q < 4; q++) {
+                const k = this.neighbor(i, x, y, q);
+                if (k < 0) continue;
+                const sk = stateOf[type[k]];
+                if (a === ID.drain ? sk === LIQUID : (type[k] !== 0 && !this.fixed[type[k]] && sk !== STATIC)) this.set(k, 0);
+              }
             } else if (a === ID.plant) {
               if ((b === ID.water || b === ID.salt_water) && rnd() < 0.04) {
                 if (rnd() < 0.35) this.set(j, ID.plant);
@@ -493,6 +551,16 @@
             else if (e.key === 'push' && cur !== 0 && !this.fixed[cur] && this.stateOf[cur] !== STATIC) {
               this.vx[i] += pvx * 0.35; this.vy[i] += pvy * 0.35;
             }
+            continue;
+          }
+          if (e.state === BEAM) {
+            if (dx !== 0 || dy !== 0) continue; // one beam per brush dab
+            if (cur !== 0 && this.stateOf[cur] !== EMPTY) continue;
+            this.set(i, elId);
+            const len = Math.hypot(pvx, pvy);
+            const speed = elId === ID.lightning ? 7 : 6;
+            if (elId === ID.lightning || len < 0.5) { this.vx[i] = 0; this.vy[i] = speed; }
+            else { this.vx[i] = (pvx / len) * speed; this.vy[i] = (pvy / len) * speed; }
             continue;
           }
           if (cur !== 0 && !replace) continue;
