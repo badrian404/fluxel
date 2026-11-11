@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#0d0f14">
+  <title>Fluxel</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <header id="bar">
+      <span class="logo">Fluxel</span>
+      <button id="pause" title="Pause (Space)">Pause</button>
+      <button id="step" title="Step one frame (S)">Step</button>
+      <button id="view" title="Heat view (V)">Heat</button>
+      <button id="replace" title="Paint over existing pixels (R)">Replace</button>
+      <button id="demo" title="Load the demo scene">Demo</button>
+      <button id="clear" title="Clear everything (Delete)">Clear</button>
+      <label class="brush" title="Brush size ([ and ], or mouse wheel)">Brush
+        <input id="brush" type="range" min="0" max="40" value="4"><span id="brushVal">5</span>
+      </label>
+      <label class="quality" title="Simulation resolution">
+        <select id="quality">
+          <option value="auto">Auto</option>
+          <option value="low">Low</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+          <option value="ultra">Ultra</option>
+        </select>
+      </label>
+      <span class="stats"><span id="grid"></span> <span id="fps"></span> <span id="hover"></span></span>
+    </header>
+    <main id="stage"><canvas id="screen"></canvas><div id="hint">Pick an element below, then drag to pour. Fling it for momentum. Right-click or the Erase tool removes. Try Stir in Tools to push water around.<button id="hintClose" aria-label="Dismiss">Got it</button></div></main>
+    <nav id="palette">
+      <div id="cats"></div>
+      <div id="els"></div>
+    </nav>
+  </div>
+  <script src="js/elements.js"></script>
+  <script src="js/fluid.js"></script>
+  <script src="js/sim.js"></script>
+  <script src="js/render.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
