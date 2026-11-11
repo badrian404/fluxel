@@ -18,7 +18,7 @@
       <button id="demo" title="Load the demo scene">Demo</button>
       <button id="clear" title="Clear everything (Delete)">Clear</button>
       <label class="brush" title="Brush size ([ and ], or mouse wheel)">Brush
-        <input id="brush" type="range" min="0" max="40" value="4"><span id="brushVal">5</span>
+        <input id="brush" type="range" min="0" max="80" value="4"><span id="brushVal">5</span>
       </label>
       <label class="quality" title="Simulation resolution">
         <select id="quality">
@@ -27,11 +27,15 @@
           <option value="medium">Medium</option>
           <option value="high">High</option>
           <option value="ultra">Ultra</option>
+          <option value="hd">1280×720</option>
+          <option value="tall">1280×1200</option>
+          <option value="fhd">1920×1080 (heavy)</option>
+          <option value="car">1920×1200 (heavy)</option>
         </select>
       </label>
       <span class="stats"><span id="grid"></span> <span id="fps"></span> <span id="hover"></span></span>
     </header>
-    <main id="stage"><canvas id="screen"></canvas><div id="hint">Pick an element below, then drag to pour. Fling it for momentum. Right-click or the Erase tool removes. Try Stir in Tools to push water around.<button id="hintClose" aria-label="Dismiss">Got it</button></div></main>
+    <main id="stage"><canvas id="screen"></canvas><div id="hint">Pick an element below, then drag to pour. Fling it for momentum. Grab objects to throw them. Right-click or the Erase tool removes.<button id="hintClose" aria-label="Dismiss">Got it</button></div></main>
     <nav id="palette">
       <div id="cats"></div>
       <div id="els"></div>
@@ -40,6 +44,7 @@
   <script src="js/elements.js"></script>
   <script src="js/fluid.js"></script>
   <script src="js/sim.js"></script>
+  <script src="js/bodies.js"></script>
   <script src="js/render.js"></script>
   <script src="js/main.js"></script>
 </body>

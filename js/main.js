@@ -9,6 +9,10 @@
     medium: { label: 'Medium', cells: 50000 },
     high: { label: 'High', cells: 100000 },
     ultra: { label: 'Ultra', cells: 180000 },
+    hd: { label: '1280×720', w: 1280, h: 720 },
+    tall: { label: '1280×1200', w: 1280, h: 1200 },
+    fhd: { label: '1920×1080', w: 1920, h: 1080 },
+    car: { label: '1920×1200', w: 1920, h: 1200 },
   };
   const store = {
     get(k) { try { return localStorage.getItem('fluxel.' + k); } catch (e) { return null; } },
@@ -53,14 +57,19 @@
       if (!autoPick) autoPick = benchmark();
       key = autoPick.pick;
     }
-    let cells = QUALITY[key].cells;
-    const { w, h } = stageSize();
-    // Never use cells smaller than 2 CSS pixels; phones get a smaller grid naturally.
-    cells = Math.min(cells, Math.floor((w * h) / 4));
-    const aspect = w / h;
-    const W = Math.max(60, Math.round(Math.sqrt(cells * aspect)));
-    const H = Math.max(40, Math.round(cells / W));
+    const q = QUALITY[key];
+    let W, H;
+    if (q.w) { W = q.w; H = q.h; } // exact pixel size, letterboxed to fit the screen
+    else {
+      const { w, h } = stageSize();
+      // Never use cells smaller than 2 CSS pixels; phones get a smaller grid naturally.
+      const cells = Math.min(q.cells, Math.floor((w * h) / 4));
+      const aspect = w / h;
+      W = Math.max(60, Math.round(Math.sqrt(cells * aspect)));
+      H = Math.max(40, Math.round(cells / W));
+    }
     world = new FX.World(W, H);
+    setBrush(Math.max(2, Math.round(Math.max(W, H) / 64)));
     renderer.resize(world);
     fit();
     updateInfo();
@@ -127,7 +136,14 @@
     e.preventDefault();
     canvas.setPointerCapture(e.pointerId);
     const c = toCell(e);
-    pointer = { id: e.pointerId, x: c.x, y: c.y, lx: c.x, ly: c.y, erase: e.button === 2 };
+    pointer = { id: e.pointerId, x: c.x, y: c.y, lx: c.x, ly: c.y, erase: e.button === 2, grab: null };
+    // Objects: tap one to pick it up and throw it; with an object selected, tap empty space to drop a new one.
+    if (!pointer.erase && current !== ID.erase) {
+      const cx = Math.round(c.x), cy = Math.round(c.y);
+      let b = world.bodyAt(cx, cy);
+      if (!b && EL[current].state === S.OBJECT) b = world.spawnBody(current, cx, cy);
+      if (b) { pointer.grab = b; b.grab = { x: b.x, y: b.y }; pointer.ox = b.x - c.x; pointer.oy = b.y - c.y; return; }
+    }
     world.paint(Math.round(c.x), Math.round(c.y), brush, pointer.erase ? ID.erase : current, 0, 0, replace);
   });
   canvas.addEventListener('pointermove', (e) => {
@@ -135,14 +151,19 @@
     hover = c;
     if (!pointer || e.pointerId !== pointer.id) return;
     pointer.x = c.x; pointer.y = c.y;
+    if (pointer.grab) pointer.grab.grab = { x: Math.round(c.x + pointer.ox), y: Math.round(c.y + pointer.oy) };
   });
-  const end = (e) => { if (pointer && e.pointerId === pointer.id) pointer = null; };
+  const end = (e) => {
+    if (!pointer || e.pointerId !== pointer.id) return;
+    if (pointer.grab) pointer.grab.grab = null; // let go: it keeps its speed, so a flick throws it
+    pointer = null;
+  };
   canvas.addEventListener('pointerup', end);
   canvas.addEventListener('pointercancel', end);
   canvas.addEventListener('pointerleave', () => { hover = null; });
   canvas.addEventListener('wheel', (e) => { e.preventDefault(); setBrush(brush + (e.deltaY < 0 ? 1 : -1)); }, { passive: false });
 
-  function setBrush(v) { brush = Math.max(0, Math.min(40, v)); $('#brushVal').textContent = brush + 1; $('#brush').value = brush; }
+  function setBrush(v) { brush = Math.max(0, Math.min(80, v)); $('#brushVal').textContent = brush + 1; $('#brush').value = brush; }
 
   window.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
@@ -210,7 +231,7 @@
   const STEP = 1000 / 60;
   function frame(now) {
     const dt = Math.min(100, now - last); last = now;
-    if (pointer) {
+    if (pointer && !pointer.grab) {
       const a = { x: pointer.lx, y: pointer.ly }, b = { x: pointer.x, y: pointer.y };
       paintLine(a, b, pointer.erase);
       pointer.lx = pointer.x; pointer.ly = pointer.y;

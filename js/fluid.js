@@ -147,11 +147,12 @@
 
       // 6. Grid -> cells (FLIP/PIC blend), with per-element viscosity.
       const flip = this.flip, pic = 1 - flip, maxV = this.maxSpeed, viscOf = w.viscOf;
+      const awake = w.awake, chunkOf = w.chunkOf;
       for (let y = 0; y < H; y++) {
         const cy = cyOf[y], fy = fyOf[y], row = y * W;
         for (let x = 0; x < W; x++) {
           const i = row + x;
-          if (stateOf[type[i]] !== LIQUID) continue;
+          if (stateOf[type[i]] !== LIQUID || !awake[chunkOf[i]]) continue;
           const cx = cxOf[x], fx = fxOf[x];
           if (kind[cy * cw + cx] === SOLID) {
             // Liquid squeezed into a mostly-solid coarse cell (next to walls): plain free fall.

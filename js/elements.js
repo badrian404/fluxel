@@ -3,7 +3,7 @@
   'use strict';
   const FX = (window.FX = window.FX || {});
 
-  const S = { EMPTY: 0, STATIC: 1, POWDER: 2, LIQUID: 3, GAS: 4, FIRE: 5, TOOL: 6, BEAM: 7 };
+  const S = { EMPTY: 0, STATIC: 1, POWDER: 2, LIQUID: 3, GAS: 4, FIRE: 5, TOOL: 6, BEAM: 7, OBJECT: 8 };
   const list = [];
   const id = {};
 
@@ -33,7 +33,8 @@
         hidden: false,
         tick: null,
         trail: -1, // beams: the glow they leave behind
-        pop: 0, // upward kick when something turns into this (popcorn)
+        pop: 0,
+        body: null, // objects: shape, density, bounce // upward kick when something turns into this (popcorn)
       },
       o
     );
@@ -120,6 +121,20 @@
   def('corn', { cat: 'Food', label: 'Popcorn kernel', state: S.POWDER, color: '#f2b705', vary: 10, density: 1200, cond: 0.2, hiT: 180, hiTo: 'popcorn' });
   def('popcorn', { state: S.POWDER, color: '#fffaf0', vary: 10, density: 100, cond: 0.05, burn: 0.05, igniteT: 300, burnTime: 40, burnTo: 'ash', pop: 3.5, hidden: true });
 
+  // ---------- Objects: solid things that move as one piece ----------
+  // Part colours (what the cells of an object are made of).
+  const part = (key, color, vary) => def(key, { color, vary: vary == null ? 6 : vary, cond: 0, density: 99999, hidden: true, part: true });
+  part('felt', '#d4e83a', 10); part('seam', '#f4f4ec', 3);
+  part('duck', '#ffd23f', 6); part('duck_wing', '#f0b21d', 6); part('beak', '#ff8a1a', 4); part('eye', '#1b1b22', 2);
+  part('bowl', '#26365e', 6); part('bowl_hole', '#0b0f1a', 2);
+  part('plank', '#b07a42', 12); part('plank_dark', '#7c5229', 8);
+  part('bb_red', '#e63946', 4); part('bb_white', '#f6f6f2', 3); part('bb_blue', '#2e6fdb', 4); part('bb_yellow', '#ffd23f', 4);
+  def('tennis_ball', { cat: 'Objects', state: S.OBJECT, color: '#d4e83a', body: { shape: 'tennis', size: 1, density: 350, bounce: 0.72 } });
+  def('rubber_duck', { cat: 'Objects', state: S.OBJECT, color: '#ffd23f', body: { shape: 'duck', size: 1, density: 220, bounce: 0.25 } });
+  def('beach_ball', { cat: 'Objects', state: S.OBJECT, color: '#e63946', body: { shape: 'beach', size: 1.5, density: 80, bounce: 0.8 } });
+  def('crate', { cat: 'Objects', state: S.OBJECT, color: '#b07a42', body: { shape: 'crate', size: 1.2, density: 600, bounce: 0.12 } });
+  def('bowling_ball', { cat: 'Objects', state: S.OBJECT, color: '#26365e', body: { shape: 'bowling', size: 1.1, density: 1600, bounce: 0.08 } });
+
   // ---------- Special ----------
   def('cloner', { cat: 'Special', color: '#c9b03a', vary: 4, cond: 0, density: 99999 });
   def('drain', { cat: 'Special', color: '#202024', vary: 2, cond: 0, density: 99999 }); // swallows liquids
@@ -155,10 +170,10 @@
       heat: r.heat || 0,
     };
   }
-  react('water', 'lava', { a: 'steam', b: 'basalt', p: 0.25 });
-  react('water', 'molten_metal', { a: 'steam', b: 'metal', p: 0.25 });
-  react('water', 'molten_glass', { a: 'steam', b: 'glass', p: 0.25 });
-  react('salt_water', 'lava', { a: 'steam', b: 'basalt', p: 0.25 });
+  react('lava', 'water', { a: 'basalt', b: 'steam', p: 0.25 });
+  react('molten_metal', 'water', { a: 'metal', b: 'steam', p: 0.25 });
+  react('molten_glass', 'water', { a: 'glass', b: 'steam', p: 0.25 });
+  react('lava', 'salt_water', { a: 'basalt', b: 'steam', p: 0.25 });
   react('salt', 'water', { a: 'salt_water', b: 'salt_water', p: 0.02 });
   react('salt', 'ice', { b: 'salt_water', p: 0.03 });
   react('salt', 'snow', { b: 'salt_water', p: 0.05 });
@@ -185,5 +200,5 @@
   FX.ID = id;
   FX.RX = rx;
   FX.NEL = N;
-  FX.CATS = ['Powders', 'Liquids', 'Solids', 'Gases', 'Energy', 'Food', 'Special', 'Tools'];
+  FX.CATS = ['Powders', 'Liquids', 'Solids', 'Gases', 'Energy', 'Food', 'Objects', 'Special', 'Tools'];
 })();

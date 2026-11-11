@@ -33,6 +33,7 @@
       this.viscOf = new Float32Array(NEL);
       this.hiT = new Float32Array(NEL);
       this.loT = new Float32Array(NEL);
+      this.igT = new Float32Array(NEL);
       for (const e of EL) {
         this.stateOf[e.id] = e.state === S.TOOL ? STATIC : e.state;
         this.densOf[e.id] = e.density;
@@ -40,16 +41,44 @@
         this.viscOf[e.id] = e.visc;
         this.hiT[e.id] = e.hiT == null ? Infinity : e.hiT;
         this.loT[e.id] = e.loT == null ? -Infinity : e.loT;
+        this.igT[e.id] = e.igniteT == null ? Infinity : e.igniteT;
       }
       this.fixed = new Uint8Array(NEL); // cannot be pushed or destroyed by explosions
       for (const k of ['wall', 'cloner', 'drain', 'void', 'heater', 'cooler']) this.fixed[ID[k]] = 1;
 
+      // Chunks of 32x32 cells sleep when nothing in them changed last step.
+      const CS = 32, ccw = (this.ccw = Math.ceil(W / CS)), cch = (this.cch = Math.ceil(H / CS));
+      this.CS = CS;
+      const nch = ccw * cch;
+      this.awake = new Uint8Array(nch).fill(1);
+      this.awakeNext = new Uint8Array(nch).fill(1);
+      this.heatAwake = new Uint8Array(nch).fill(1);
+      this.heatNext = new Uint8Array(nch).fill(1);
+      this.chunkOf = nch < 65536 ? new Uint16Array(N) : new Uint32Array(N);
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) this.chunkOf[y * W + x] = ((y / CS) | 0) * ccw + ((x / CS) | 0);
+      // Elements that need ticking even when nothing moves (reactions, timers, machines).
+      this.reactive = new Uint8Array(NEL);
+      for (const e of EL) {
+        if (e.life || e.state === S.BEAM) this.reactive[e.id] = 1;
+        // Only the first element of a reaction pair needs ticking; the check looks both ways.
+        for (let b = 0; b < NEL; b++) if (RX[e.id * NEL + b]) { this.reactive[e.id] = 1; break; }
+      }
+      for (const k of ['cloner', 'drain', 'void', 'heater', 'cooler', 'plant', 'fire', 'plasma']) this.reactive[ID[k]] = 1;
+
       const scale = Math.max(2, Math.round(W / 110));
       this.fluid = new FX.Fluid(W, H, scale);
       this.count = 0;
+      this.initBodies();
     }
 
+    wakeAll() { this.awake.fill(1); this.awakeNext.fill(1); this.heatAwake.fill(1); this.heatNext.fill(1); }
+
+    // Count non-empty cells (for the stats line).
+    countCells() { let n = 0; const t = this.type; for (let i = 0; i < t.length; i++) if (t[i] !== 0) n++; return n; }
+
     clear() {
+      this.wakeAll();
+      this.bodies.length = 0; this.bodyId.fill(0);
       this.type.fill(0); this.temp.fill(AMBIENT); this.vx.fill(0); this.vy.fill(0);
       this.ax.fill(0); this.ay.fill(0); this.life.fill(0); this.burn.fill(0);
     }
@@ -58,6 +87,7 @@
     set(i, id, keepTemp) {
       const e = EL[id];
       this.type[i] = id;
+      this.awakeNext[this.chunkOf[i]] = 1;
       if (!keepTemp || id === 0) this.temp[i] = id === 0 ? this.temp[i] : e.temp;
       this.vx[i] = 0; this.vy[i] = 0; this.ax[i] = 0; this.ay[i] = 0;
       this.life[i] = e.life ? e.life[0] + ((rnd() * (e.life[1] - e.life[0])) | 0) : 0;
@@ -89,6 +119,7 @@
       const bn = this.burn; t = bn[i]; bn[i] = bn[j]; bn[j] = t;
       const sh = this.shade; t = sh[i]; sh[i] = sh[j]; sh[j] = t;
       this.stamp[i] = this.cur; this.stamp[j] = this.cur;
+      this.awakeNext[this.chunkOf[i]] = 1; this.awakeNext[this.chunkOf[j]] = 1;
     }
 
     // Can the cell at i move into j (dy = vertical direction of the move)?
@@ -287,43 +318,72 @@
       this.cur = this.frame & 255 || 1;
       if (this.cur === 1) this.stamp.fill(0);
       this.fluid.step(this);
+      if (this.bodies.length) this.stepBodies();
       this.movePass();
       this.heatPass();
       this.tickPass();
+      // Chunks touched this step (and their neighbours) stay awake next step.
+      this.dilate(this.awakeNext, this.awake);
+      this.dilate(this.heatNext, this.heatAwake);
+      for (let c = 0; c < this.awake.length; c++) if (this.awake[c]) this.heatAwake[c] = 1;
+      this.awakeNext.fill(0); this.heatNext.fill(0);
+      if (this.frame % 30 === 0) this.count = this.countCells();
+    }
+
+    dilate(src, dst) {
+      const ccw = this.ccw, cch = this.cch;
+      dst.fill(0);
+      for (let cy = 0; cy < cch; cy++) for (let cx = 0; cx < ccw; cx++) {
+        if (!src[cy * ccw + cx]) continue;
+        for (let dy = -1; dy <= 1; dy++) {
+          const y = cy + dy; if (y < 0 || y >= cch) continue;
+          for (let dx = -1; dx <= 1; dx++) { const x = cx + dx; if (x >= 0 && x < ccw) dst[y * ccw + x] = 1; }
+        }
+      }
     }
 
     movePass() {
       const W = this.W, H = this.H, type = this.type, stateOf = this.stateOf, stamp = this.stamp, cur = this.cur;
+      const CS = this.CS, ccw = this.ccw, awake = this.awake;
       const ltr = (this.frame & 1) === 0;
       // Falling things: bottom-up.
       for (let y = H - 1; y >= 0; y--) {
-        const row = y * W;
-        for (let k = 0; k < W; k++) {
-          const x = ltr ? k : W - 1 - k, i = row + x;
-          const st = stateOf[type[i]];
-          if (st !== LIQUID && st !== POWDER) continue;
-          if (stamp[i] === cur) continue;
-          stamp[i] = cur;
-          if (st === LIQUID) this.updateLiquid(i, x, y); else this.updatePowder(i, x, y);
+        const row = y * W, crow = ((y / CS) | 0) * ccw;
+        for (let kc = 0; kc < ccw; kc++) {
+          const cx = ltr ? kc : ccw - 1 - kc;
+          if (!awake[crow + cx]) continue;
+          const x0 = cx * CS, x1 = Math.min(W, x0 + CS);
+          for (let k = x0; k < x1; k++) {
+            const x = ltr ? k : x1 - 1 - (k - x0), i = row + x;
+            const st = stateOf[type[i]];
+            if (st !== LIQUID && st !== POWDER) continue;
+            if (stamp[i] === cur) continue;
+            stamp[i] = cur;
+            if (st === LIQUID) this.updateLiquid(i, x, y); else this.updatePowder(i, x, y);
+          }
         }
       }
       // Rising things: top-down.
       for (let y = 0; y < H; y++) {
-        const row = y * W;
-        for (let k = 0; k < W; k++) {
-          const x = ltr ? k : W - 1 - k, i = row + x;
-          const st = stateOf[type[i]];
-          if (st !== GAS && st !== FIRE) continue;
-          if (stamp[i] === cur) continue;
-          stamp[i] = cur;
-          this.updateGas(i, x, y, st);
+        const row = y * W, crow = ((y / CS) | 0) * ccw;
+        for (let kc = 0; kc < ccw; kc++) {
+          const cx = ltr ? kc : ccw - 1 - kc;
+          if (!awake[crow + cx]) continue;
+          const x0 = cx * CS, x1 = Math.min(W, x0 + CS);
+          for (let k = x0; k < x1; k++) {
+            const x = ltr ? k : x1 - 1 - (k - x0), i = row + x;
+            const st = stateOf[type[i]];
+            if (st === GAS || st === FIRE) {
+              if (stamp[i] === cur) continue;
+              stamp[i] = cur;
+              this.updateGas(i, x, y, st);
+            } else if (st === BEAM) {
+              if (stamp[i] === cur) continue;
+              stamp[i] = cur;
+              this.moveBeam(i);
+            }
+          }
         }
-      }
-      // Beams.
-      for (let i = 0; i < this.N; i++) {
-        if (stateOf[type[i]] !== BEAM || stamp[i] === cur) continue;
-        stamp[i] = cur;
-        this.moveBeam(i);
       }
     }
 
@@ -369,21 +429,32 @@
 
     heatPass() {
       const W = this.W, H = this.H, type = this.type, temp = this.temp, condOf = this.condOf;
-      for (let y = 0; y < H; y++) {
-        const row = y * W;
-        for (let x = 0; x < W; x++) {
-          const i = row + x, a = type[i], ca = condOf[a];
-          let t = temp[i];
-          if (x < W - 1) {
-            const j = i + 1, k = Math.min(ca, condOf[type[j]]);
-            if (k > 0) { const d = (temp[j] - t) * k * 0.22; t += d; temp[j] -= d; }
+      const CS = this.CS, ccw = this.ccw, cch = this.cch, act = this.heatAwake, next = this.heatNext, wake = this.awakeNext;
+      for (let cy = 0; cy < cch; cy++) {
+        const y0 = cy * CS, y1 = Math.min(H, y0 + CS);
+        for (let cx = 0; cx < ccw; cx++) {
+          const c = cy * ccw + cx;
+          if (!act[c]) continue;
+          const x0 = cx * CS, x1 = Math.min(W, x0 + CS);
+          let busy = false;
+          for (let y = y0; y < y1; y++) {
+            const row = y * W;
+            for (let x = x0; x < x1; x++) {
+              const i = row + x, a = type[i], ca = condOf[a];
+              let t = temp[i];
+              if (x < W - 1) {
+                const j = i + 1, k = Math.min(ca, condOf[type[j]]);
+                if (k > 0) { const d = (temp[j] - t) * k * 0.22; if (d > 0.02 || d < -0.02) busy = true; t += d; temp[j] -= d; }
+              }
+              if (y < H - 1) {
+                const j = i + W, k = Math.min(ca, condOf[type[j]]);
+                if (k > 0) { const d = (temp[j] - t) * k * 0.22; if (d > 0.02 || d < -0.02) busy = true; t += d; temp[j] -= d; }
+              }
+              if (a === 0) { const d = (AMBIENT - t) * 0.015; if (d > 0.02 || d < -0.02) busy = true; t += d; }
+              temp[i] = t;
+            }
           }
-          if (y < H - 1) {
-            const j = i + W, k = Math.min(ca, condOf[type[j]]);
-            if (k > 0) { const d = (temp[j] - t) * k * 0.22; t += d; temp[j] -= d; }
-          }
-          if (a === 0) t += (AMBIENT - t) * 0.015;
-          temp[i] = t;
+          if (busy) { next[c] = 1; wake[c] = 1; }
         }
       }
     }
@@ -407,6 +478,7 @@
 
     explode(cx, cy, R) {
       const W = this.W, H = this.H, R2 = R * 2;
+      if (this.bodies.length) this.pushBodiesNear(cx, cy, R2 + 6, 5);
       for (let dy = -R2; dy <= R2; dy++) {
         const y = cy + dy;
         if (y < 0 || y >= H) continue;
@@ -433,16 +505,28 @@
 
     tickPass() {
       const W = this.W, H = this.H, type = this.type, temp = this.temp, stateOf = this.stateOf;
-      const hiT = this.hiT, loT = this.loT;
-      let count = 0;
-      for (let y = 0; y < H; y++) {
-        for (let x = 0; x < W; x++) {
+      const hiT = this.hiT, loT = this.loT, igT = this.igT;
+      const CS = this.CS, ccw = this.ccw, cch = this.cch, awake = this.awake, wake = this.awakeNext, reactive = this.reactive, chunkOf = this.chunkOf;
+      for (let cy = 0; cy < cch; cy++) {
+       const y0 = cy * CS, y1 = Math.min(H, y0 + CS);
+       for (let cx = 0; cx < ccw; cx++) {
+        if (!awake[cy * ccw + cx]) continue;
+        const x0 = cx * CS, x1 = Math.min(W, x0 + CS);
+        for (let y = y0; y < y1; y++) {
+        for (let x = x0; x < x1; x++) {
           const i = y * W + x;
           const a = type[i];
           if (a === 0) continue;
-          count++;
-          const e = EL[a];
           const t = temp[i];
+          if (!reactive[a] && this.burn[i] === 0) {
+            // Fast path: inert cells only need temperature checks.
+            if (t >= hiT[a]) this.change(i, pick(EL[a].hiTo));
+            else if (t <= loT[a]) this.change(i, pick(EL[a].loTo));
+            else if (t >= igT[a]) this.ignite(i, x, y);
+            continue;
+          }
+          wake[chunkOf[i]] = 1;
+          const e = EL[a];
 
           // State changes from temperature.
           if (t >= hiT[a]) { this.change(i, pick(e.hiTo)); continue; }
@@ -528,8 +612,9 @@
             }
           }
         }
+        }
+       }
       }
-      this.count = count;
     }
 
     // ---------- painting ----------
@@ -544,6 +629,13 @@
           const x = cx + dx;
           if (x < 0 || x >= W) continue;
           const i = y * W + x, cur = this.type[i];
+          if (this.bodyId[i]) {
+            const b = this.bodies.find((o) => o.id === this.bodyId[i]);
+            if (b && e.key === 'erase') this.removeBody(b);
+            else if (b && e.key === 'push') { b.vx += pvx * 0.02; b.vy += pvy * 0.02; }
+            continue;
+          }
+          if (e.state === S.OBJECT) continue;
           if (e.state === S.TOOL) {
             if (e.key === 'erase') { if (cur !== 0) this.set(i, 0); this.temp[i] = AMBIENT; }
             else if (e.key === 'heat') this.temp[i] = Math.min(3000, this.temp[i] + 12);

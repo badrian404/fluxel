@@ -25,11 +25,23 @@ melts and mixes (flour + water makes dough, dough bakes into bread, sugar carame
 and special blocks: cloner, drain (removes liquids), void (removes anything that moves), heater and cooler.
 Laser and freeze ray shoot in the direction you drag; lightning strikes downward.
 
+Objects (tennis ball, rubber duck, beach ball, crate, bowling ball) move as one piece: they bounce,
+float or sink depending on their density, drift with the current, and push water aside.
+Tap an object to pick it up; flick and release to throw it.
+
+## Resolution
+
+Auto, Low, Medium, High and Ultra size the grid to the screen. The fixed sizes (1280×720, 1280×1200,
+1920×1080 and 1920×1200) simulate exactly that many cells and are scaled to fit. The big ones are heavy:
+expect slow motion while a lot is moving. Regions where nothing changes go to sleep, so settled scenes
+run much faster.
+
 ## Controls
 
 | Input | Action |
 | --- | --- |
 | Drag (mouse or finger) | Pour the selected element; flinging gives it speed |
+| Tap an object | Pick it up; flick and release to throw |
 | Right-click | Erase |
 | Mouse wheel, `[` `]` | Brush size |
 | Space | Pause / play |

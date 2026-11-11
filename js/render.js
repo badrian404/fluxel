@@ -111,7 +111,7 @@
       }
       this.offCtx.putImageData(this.img, 0, 0);
       const ctx = this.ctx;
-      ctx.imageSmoothingEnabled = false;
+      ctx.imageSmoothingEnabled = layout.scale < 1; // average when the grid is bigger than the screen
       ctx.fillStyle = '#07080b';
       ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
       ctx.drawImage(this.off, layout.ox, layout.oy, layout.w, layout.h);
