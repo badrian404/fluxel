@@ -204,30 +204,9 @@ void main() {
   o = vec4(u, v, u0, v0);
 }`;
 
-  // Open air: 1 at the top of the world, spread along rows and columns of air cells, fading a little
-  // with every hop. Air sealed in by liquid and walls (a bubble in a pipe) fades to 0 within a few steps.
-  const FS_OPEN = `
-uniform sampler2D uK;
-uniform sampler2D uO;
-uniform ivec2 uAxis;
-out vec4 o;
-void main() {
-  ivec2 c = ivec2(gl_FragCoord.xy);
-  if (texelFetch(uK, c, 0).x != 0.0) { o = vec4(0.0); return; }
-  if (c.y == 0) { o = vec4(1.0, 0.0, 0.0, 0.0); return; }
-  float m = texelFetch(uO, c, 0).x;
-  for (int s = -1; s <= 1; s += 2) for (int j = 1; j <= 48; j++) {
-    ivec2 q = c + uAxis * (j * s);
-    if (q.x < 0 || q.y < 0 || q.x >= CW || q.y >= CH || texelFetch(uK, q, 0).x != 0.0) break;
-    m = max(m, texelFetch(uO, q, 0).x);
-  }
-  o = vec4(m * 0.96, 0.0, 0.0, 0.0);
-}`;
-
   const FS_DIV = `
 uniform sampler2D uK;
 uniform sampler2D uF;
-uniform sampler2D uO;
 uniform float uFill;
 out vec4 o;
 float kindAt(ivec2 c) { return texelFetch(uK, c, 0).x; }
@@ -236,8 +215,6 @@ void main() {
   vec4 k = texelFetch(uK, c, 0);
   vec4 f = texelFetch(uF, c, 0);
   float d = texelFetch(uF, c + ivec2(1, 0), 0).x - f.x + texelFetch(uF, c + ivec2(0, 1), 0).y - f.y;
-  // Sealed air (a bubble) carries pressure like the liquid around it, so it does not act as a drain.
-  if (k.x == 0.0 && texelFetch(uO, c, 0).x < 0.08) { o = vec4(1.0, d, 0.0, 0.0); return; }
   if (k.x != 1.0) { o = vec4(k.x, 0.0, 0.0, 0.0); return; }
   // Under-filled interior cells pull their neighbours in, closing holes in the bulk.
   float room = k.w - k.z;
@@ -1075,9 +1052,6 @@ void main() {
       this.Fv = T(cw + 1, ch + 1, ...RGBA32F); this.fFbo = F([this.Fv]);
       this.Fp = T(cw + 1, ch + 1, ...RGBA32F); this.fpFbo = F([this.Fp]);
       this.D = T(cw, ch, ...RGBA32F); this.dFbo = F([this.D]);
-      this.O = [0, 1].map(() => T(cw, ch, ...RGBA32F));
-      this.oFbo = this.O.map((t) => F([t]));
-      this.oc = 0;
       // Multigrid levels: level 0 is the solver grid, each next one half the size.
       this.levels = [];
       for (let w = cw, h = ch, l = 0; ; l++) {
@@ -1098,7 +1072,7 @@ void main() {
       head += COMMON;
       const P = (src) => { const x = makeProgram(gl, head + src); res.prog.push(x.p); return x; };
       this.prog = {
-        kind: P(FS_KIND), p2g: P(FS_P2G), div: P(FS_DIV), open: P(FS_OPEN), smooth: P(FS_SMOOTH), resid: P(FS_RESID), restrict: P(FS_RESTRICT), prolong: P(FS_PROLONG), project: P(FS_PROJECT),
+        kind: P(FS_KIND), p2g: P(FS_P2G), div: P(FS_DIV), smooth: P(FS_SMOOTH), resid: P(FS_RESID), restrict: P(FS_RESTRICT), prolong: P(FS_PROLONG), project: P(FS_PROJECT),
         physics: P(FS_PHYSICS), move: P(FS_MOVE), shift: P(FS_SHIFT), lift: P(FS_LIFT), beam: P(FS_BEAM), brush: P(FS_BRUSH),
         edit: P(FS_EDIT), clear: P(FS_CLEAR), render: P(FS_RENDER),
       };
@@ -1209,12 +1183,7 @@ void main() {
       const A = this.A[this.cur], B = this.B[this.cur];
       this.run(prog.kind, this.kFbo, cw, ch, { uA: A, uMask: this.maskTex });
       this.run(prog.p2g, this.fFbo, cw + 1, ch + 1, { uA: A, uB: B, uMask: this.maskTex, uK: this.K, uG: this.gravity });
-      for (let k = 0; k < 6; k++) {
-        const n = 1 - this.oc;
-        this.run(prog.open, this.oFbo[n], cw, ch, { uK: this.K, uO: this.O[this.oc], uAxis: k & 1 ? [1, 0] : [0, 1] });
-        this.oc = n;
-      }
-      this.run(prog.div, this.dFbo, cw, ch, { uK: this.K, uF: this.Fv, uO: this.O[this.oc], uFill: this.fillPull });
+      this.run(prog.div, this.dFbo, cw, ch, { uK: this.K, uF: this.Fv, uFill: this.fillPull });
       for (let k = 0; k < this.vcycles; k++) this.vcycle(0);
       const L0 = this.levels[0];
       this.run(prog.project, this.fpFbo, cw + 1, ch + 1, { uK: this.D, uF: this.Fv, uP: L0.p[L0.pc] });
@@ -1268,7 +1237,6 @@ void main() {
       this.dabs.length = 0;
       this.edit = null;
       this.run(this.prog.clear, this.fbo[this.cur], this.W, this.H, {});
-      for (const f of this.oFbo) { gl.bindFramebuffer(gl.FRAMEBUFFER, f); gl.clearBufferfv(gl.COLOR, 0, [1, 0, 0, 0]); }
       for (const L of this.levels) for (const f of L.pFbo) { gl.bindFramebuffer(gl.FRAMEBUFFER, f); gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, 0]); }
     }
 
