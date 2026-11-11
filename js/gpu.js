@@ -237,6 +237,7 @@ bool inDim(ivec2 c) { return c.x >= 0 && c.y >= 0 && c.x < uDim.x && c.y < uDim.
   const FS_SMOOTH = MG_HEAD + `
 uniform sampler2D uP;
 uniform float uOmega;
+uniform float uLo; // lowest pressure allowed: liquid cannot pull much
 void main() {
   ivec2 c = ivec2(gl_FragCoord.xy);
   vec4 kr = texelFetch(uKR, c, 0);
@@ -248,7 +249,7 @@ void main() {
     sum += texelFetch(uP, n, 0).x; cnt += 1.0;
   }
   float p = texelFetch(uP, c, 0).x;
-  o = vec4(cnt > 0.0 ? mix(p, (sum - kr.y) / cnt, uOmega) : 0.0, 0.0, 0.0, 0.0);
+  o = vec4(cnt > 0.0 ? max(uLo, mix(p, (sum - kr.y) / cnt, uOmega)) : 0.0, 0.0, 0.0, 0.0);
 }`;
   const FS_RESID = MG_HEAD + `
 uniform sampler2D uP;
@@ -1035,6 +1036,8 @@ void main() {
       const SC = (this.S = Math.max(2, Math.round(W / 320)));
       const cw = (this.cw = Math.ceil(W / SC)), ch = (this.ch = Math.ceil(H / SC));
       this.gravity = 0.2; this.flip = 0.95; this.maxSpeed = 5; this.fillPull = 0.6;
+      // Real water cannot hang from a ceiling by suction: air gets in. Allow only a little pull.
+      this.suction = 0.1;
 
       const max = gl.getParameter(gl.MAX_TEXTURE_SIZE);
       if (W > max || H > max) throw new Error('Grid larger than the GPU texture limit (' + max + ')');
@@ -1192,13 +1195,16 @@ void main() {
       this.run(prog.div, this.dFbo, cw, ch, { uK: this.K, uF: this.Fv, uFill: this.fillPull });
       for (let k = 0; k < this.vcycles; k++) this.vcycle(0);
       const L0 = this.levels[0];
+      this.smooth(L0, 4, 0.8); // settle the suction limit
       this.run(prog.project, this.fpFbo, cw + 1, ch + 1, { uK: this.D, uF: this.Fv, uP: L0.p[L0.pc] });
     }
 
+    // Only the finest level holds pressures; coarser levels hold corrections, which are not clamped.
     smooth(L, n, omega) {
+      const lo = L === this.levels[0] ? -this.suction : -1e9;
       for (let i = 0; i < n; i++) {
         const t = 1 - L.pc;
-        this.run(this.prog.smooth, L.pFbo[t], L.w, L.h, { uKR: L.kr, uP: L.p[L.pc], uDim: [L.w, L.h], uOmega: omega });
+        this.run(this.prog.smooth, L.pFbo[t], L.w, L.h, { uKR: L.kr, uP: L.p[L.pc], uDim: [L.w, L.h], uOmega: omega, uLo: lo });
         L.pc = t;
       }
     }
