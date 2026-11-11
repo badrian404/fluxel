@@ -8,7 +8,7 @@ Play it by opening `index.html` (no build step), or host the folder on GitHub Pa
 ## How it works
 
 - **GPU engine** (`js/gpu.js`, used by default): the whole simulation runs in WebGL2 fragment shaders.
-  Cell state lives in textures; each step runs the fluid solve, one physics pass (heat, reactions, fire,
+  Cell state lives in textures; each step runs the fluid solve (a multigrid pressure solve, so pressure reaches through pipes and traps), one physics pass (heat, reactions, fire,
   explosions, machines), beam passes and six 2×2 block movement passes, so cells are never lost or duplicated.
   Objects keep their physics on the CPU and read the cells around them back from the GPU without stalling it.
   Pick **CPU** in the engine menu to use the original engine below (it is also the automatic fallback

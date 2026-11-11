@@ -16,7 +16,6 @@
 
   const MOVES = 6; // movement passes per step: the top speed in cells per step
   const BEAM_PASSES = 6;
-  const JACOBI = 80;
   const MAX_DABS = 32;
   const EL_ROWS = 10;
 
@@ -159,7 +158,8 @@ void main() {
     if (s == ST_LIQUID) nl++;
     else if (s == ST_STATIC || s == ST_POWDER) ns++;
   }
-  float kind = ns * 2 >= cap ? 2.0 : nl > 0 ? 1.0 : 0.0;
+  // Any liquid makes it a fluid cell, even beside walls, so narrow pipes still carry pressure.
+  float kind = nl > 0 ? 1.0 : ns * 2 >= cap ? 2.0 : 0.0;
   o = vec4(kind, float(nl), float(ns), float(cap));
 }`;
 
@@ -213,7 +213,7 @@ float kindAt(ivec2 c) { return texelFetch(uK, c, 0).x; }
 void main() {
   ivec2 c = ivec2(gl_FragCoord.xy);
   vec4 k = texelFetch(uK, c, 0);
-  if (k.x != 1.0) { o = vec4(0.0); return; }
+  if (k.x != 1.0) { o = vec4(k.x, 0.0, 0.0, 0.0); return; }
   vec4 f = texelFetch(uF, c, 0);
   float d = texelFetch(uF, c + ivec2(1, 0), 0).x - f.x + texelFetch(uF, c + ivec2(0, 1), 0).y - f.y;
   // Under-filled interior cells pull their neighbours in, closing holes in the bulk.
@@ -222,25 +222,71 @@ void main() {
       (c.x == 0 || kindAt(c - ivec2(1, 0)) != 0.0) && (c.x == CW - 1 || kindAt(c + ivec2(1, 0)) != 0.0) &&
       (c.y == 0 || kindAt(c - ivec2(0, 1)) != 0.0) && (c.y == CH - 1 || kindAt(c + ivec2(0, 1)) != 0.0))
     d += uFill * (1.0 - k.y / room);
-  o = vec4(d, 0.0, 0.0, 0.0);
+  o = vec4(1.0, d, 0.0, 0.0);
 }`;
 
-  const FS_JACOBI = `
-uniform sampler2D uK;
-uniform sampler2D uD;
-uniform sampler2D uP;
+  // Pressure: a multigrid solve. Every level stores (kind, right hand side) in KR; kind 0 air (p = 0),
+  // 1 fluid, 2 solid (no flow). The same stencil works on every level because the coarse right hand
+  // side is half the sum of the fine residuals.
+  const MG_HEAD = `
+uniform sampler2D uKR;
+uniform ivec2 uDim;
 out vec4 o;
+bool inDim(ivec2 c) { return c.x >= 0 && c.y >= 0 && c.x < uDim.x && c.y < uDim.y; }
+`;
+  const FS_SMOOTH = MG_HEAD + `
+uniform sampler2D uP;
+uniform float uOmega;
 void main() {
   ivec2 c = ivec2(gl_FragCoord.xy);
-  if (texelFetch(uK, c, 0).x != 1.0) { o = vec4(0.0); return; }
+  vec4 kr = texelFetch(uKR, c, 0);
+  if (kr.x != 1.0) { o = vec4(0.0); return; }
   float sum = 0.0, cnt = 0.0;
   for (int k = 0; k < 4; k++) {
     ivec2 n = c + D4[k];
-    if (n.x < 0 || n.y < 0 || n.x >= CW || n.y >= CH) continue;
-    if (texelFetch(uK, n, 0).x == 2.0) continue;
+    if (!inDim(n) || texelFetch(uKR, n, 0).x == 2.0) continue;
     sum += texelFetch(uP, n, 0).x; cnt += 1.0;
   }
-  o = vec4(cnt > 0.0 ? (sum - texelFetch(uD, c, 0).x) / cnt : 0.0, 0.0, 0.0, 0.0);
+  float p = texelFetch(uP, c, 0).x;
+  o = vec4(cnt > 0.0 ? mix(p, (sum - kr.y) / cnt, uOmega) : 0.0, 0.0, 0.0, 0.0);
+}`;
+  const FS_RESID = MG_HEAD + `
+uniform sampler2D uP;
+void main() {
+  ivec2 c = ivec2(gl_FragCoord.xy);
+  vec4 kr = texelFetch(uKR, c, 0);
+  if (kr.x != 1.0) { o = vec4(0.0); return; }
+  float sum = 0.0, cnt = 0.0;
+  for (int k = 0; k < 4; k++) {
+    ivec2 n = c + D4[k];
+    if (!inDim(n) || texelFetch(uKR, n, 0).x == 2.0) continue;
+    sum += texelFetch(uP, n, 0).x; cnt += 1.0;
+  }
+  o = vec4(kr.y - (sum - cnt * texelFetch(uP, c, 0).x), 0.0, 0.0, 0.0);
+}`;
+  // uDim is the fine size here; the output is the coarse level.
+  const FS_RESTRICT = MG_HEAD + `
+uniform sampler2D uRes;
+void main() {
+  ivec2 c = ivec2(gl_FragCoord.xy);
+  bool liq = false, air = false; float r = 0.0;
+  for (int k = 0; k < 4; k++) {
+    ivec2 q = c * 2 + ivec2(k & 1, k >> 1);
+    if (!inDim(q)) continue;
+    float kind = texelFetch(uKR, q, 0).x;
+    if (kind == 1.0) { liq = true; r += texelFetch(uRes, q, 0).x; }
+    else if (kind == 0.0) air = true;
+  }
+  // A coarse face spans two fine faces, so the summed fine equations are twice the coarse stencil.
+  o = vec4(liq ? 1.0 : air ? 0.0 : 2.0, r * 0.5, 0.0, 0.0);
+}`;
+  const FS_PROLONG = MG_HEAD + `
+uniform sampler2D uP;
+uniform sampler2D uE;
+void main() {
+  ivec2 c = ivec2(gl_FragCoord.xy);
+  if (texelFetch(uKR, c, 0).x != 1.0) { o = vec4(0.0); return; }
+  o = vec4(texelFetch(uP, c, 0).x + texelFetch(uE, c / 2, 0).x, 0.0, 0.0, 0.0);
 }`;
 
   const FS_PROJECT = `
@@ -826,7 +872,7 @@ void main() {
       float sp = dot(B.yz, B.yz);
       bool up = idAt(p - ivec2(0, 1)) == 0;
       bool open = up || idAt(p - ivec2(1, 0)) == 0 || idAt(p + ivec2(1, 0)) == 0 || idAt(p + ivec2(0, 1)) == 0;
-      if (sp > 0.6) { float fo = min(open ? 0.7 : 0.18, (sp - 0.6) * (open ? 0.12 : 0.03)); c += (vec3(235, 245, 255) - c) * fo; }
+      if (sp > 0.6 && open) { float fo = min(0.7, (sp - 0.6) * 0.12); c += (vec3(235, 245, 255) - c) * fo; }
       if (up) c += 22.0;
       float depth = 0.0;
       for (int j = 1; j <= 16; j++) {
@@ -904,9 +950,9 @@ void main() {
       this.frame = 1;
       this.flick = 0;
       this.count = null;
-      const SC = (this.S = Math.max(2, Math.round(W / 160)));
+      const SC = (this.S = Math.max(2, Math.round(W / 320)));
       const cw = (this.cw = Math.ceil(W / SC)), ch = (this.ch = Math.ceil(H / SC));
-      this.gravity = 0.2; this.flip = 0.95; this.maxSpeed = 5; this.fillPull = 0.6; this.iterations = JACOBI;
+      this.gravity = 0.2; this.flip = 0.95; this.maxSpeed = 5; this.fillPull = 0.6;
 
       const max = gl.getParameter(gl.MAX_TEXTURE_SIZE);
       if (W > max || H > max) throw new Error('Grid larger than the GPU texture limit (' + max + ')');
@@ -930,9 +976,18 @@ void main() {
       this.Fv = T(cw + 1, ch + 1, ...RGBA32F); this.fFbo = F([this.Fv]);
       this.Fp = T(cw + 1, ch + 1, ...RGBA32F); this.fpFbo = F([this.Fp]);
       this.D = T(cw, ch, ...RGBA32F); this.dFbo = F([this.D]);
-      this.P = [0, 1].map(() => T(cw, ch, ...RGBA32F));
-      this.pFbo = this.P.map((t) => F([t]));
-      this.pc = 0;
+      // Multigrid levels: level 0 is the solver grid, each next one half the size.
+      this.levels = [];
+      for (let w = cw, h = ch, l = 0; ; l++) {
+        const L = { w, h, kr: l === 0 ? this.D : T(w, h, ...RGBA32F), p: [0, 1].map(() => T(w, h, ...RGBA32F)), res: T(w, h, ...RGBA32F), pc: 0 };
+        L.krFbo = l === 0 ? this.dFbo : F([L.kr]);
+        L.pFbo = L.p.map((t) => F([t]));
+        L.resFbo = F([L.res]);
+        this.levels.push(L);
+        if (w <= 4 || h <= 4) break;
+        w = Math.ceil(w / 2); h = Math.ceil(h / 2);
+      }
+      this.vcycles = 2;
 
       let head = '#version 300 es\nprecision highp float;\nprecision highp int;\nprecision highp usampler2D;\nprecision highp sampler2D;\n';
       head += `#define W ${W}\n#define H ${H}\n#define SC ${SC}\n#define CW ${cw}\n#define CH ${ch}\n#define NP ${MOVES}\n`;
@@ -941,7 +996,7 @@ void main() {
       head += COMMON;
       const P = (src) => { const x = makeProgram(gl, head + src); res.prog.push(x.p); return x; };
       this.prog = {
-        kind: P(FS_KIND), p2g: P(FS_P2G), div: P(FS_DIV), jacobi: P(FS_JACOBI), project: P(FS_PROJECT),
+        kind: P(FS_KIND), p2g: P(FS_P2G), div: P(FS_DIV), smooth: P(FS_SMOOTH), resid: P(FS_RESID), restrict: P(FS_RESTRICT), prolong: P(FS_PROLONG), project: P(FS_PROJECT),
         physics: P(FS_PHYSICS), move: P(FS_MOVE), shift: P(FS_SHIFT), beam: P(FS_BEAM), brush: P(FS_BRUSH),
         edit: P(FS_EDIT), clear: P(FS_CLEAR), render: P(FS_RENDER),
       };
@@ -1023,7 +1078,8 @@ void main() {
       for (let k = 0; k < MOVES; k++) {
         const o = (k + this.frame) & 1;
         this.statePass(this.prog.move, { uOff: [o, o], uPass: k });
-        if (k % 2 === 0) this.statePass(this.prog.shift, { uDir: [0, 1], uPer: MOVES / 2, uSub: k });
+        // Runs slide down twice per step and up once (pressure pushing liquid up a pipe), sideways three times.
+        if (k % 2 === 0) this.statePass(this.prog.shift, { uDir: [0, k === 2 ? -1 : 1], uPer: k === 2 ? 1 : 2, uSub: k });
         else this.statePass(this.prog.shift, { uDir: [((k >> 1) + this.frame) & 1 ? 1 : -1, 0], uPer: MOVES / 4, uSub: k });
       }
       if (this.bodies.length) this.issueReadback();
@@ -1035,12 +1091,32 @@ void main() {
       this.run(prog.kind, this.kFbo, cw, ch, { uA: A, uMask: this.maskTex });
       this.run(prog.p2g, this.fFbo, cw + 1, ch + 1, { uA: A, uB: B, uMask: this.maskTex, uK: this.K, uG: this.gravity });
       this.run(prog.div, this.dFbo, cw, ch, { uK: this.K, uF: this.Fv, uFill: this.fillPull });
-      for (let it = 0; it < this.iterations; it++) {
-        const n = 1 - this.pc;
-        this.run(prog.jacobi, this.pFbo[n], cw, ch, { uK: this.K, uD: this.D, uP: this.P[this.pc] });
-        this.pc = n;
+      for (let k = 0; k < this.vcycles; k++) this.vcycle(0);
+      const L0 = this.levels[0];
+      this.run(prog.project, this.fpFbo, cw + 1, ch + 1, { uK: this.K, uF: this.Fv, uP: L0.p[L0.pc] });
+    }
+
+    smooth(L, n, omega) {
+      for (let i = 0; i < n; i++) {
+        const t = 1 - L.pc;
+        this.run(this.prog.smooth, L.pFbo[t], L.w, L.h, { uKR: L.kr, uP: L.p[L.pc], uDim: [L.w, L.h], uOmega: omega });
+        L.pc = t;
       }
-      this.run(prog.project, this.fpFbo, cw + 1, ch + 1, { uK: this.K, uF: this.Fv, uP: this.P[this.pc] });
+    }
+
+    vcycle(l) {
+      const gl = this.gl, L = this.levels[l], C = this.levels[l + 1], prog = this.prog;
+      if (!C) { this.smooth(L, 40, 1); return; }
+      this.smooth(L, 3, 0.8);
+      this.run(prog.resid, L.resFbo, L.w, L.h, { uKR: L.kr, uP: L.p[L.pc], uDim: [L.w, L.h] });
+      this.run(prog.restrict, C.krFbo, C.w, C.h, { uKR: L.kr, uRes: L.res, uDim: [L.w, L.h] });
+      gl.bindFramebuffer(gl.FRAMEBUFFER, C.pFbo[C.pc]);
+      gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, 0]);
+      this.vcycle(l + 1);
+      const t = 1 - L.pc;
+      this.run(prog.prolong, L.pFbo[t], L.w, L.h, { uKR: L.kr, uP: L.p[L.pc], uE: C.p[C.pc], uDim: [L.w, L.h] });
+      L.pc = t;
+      this.smooth(L, 3, 0.8);
     }
 
     draw(layout, view) {
@@ -1068,7 +1144,7 @@ void main() {
       this.dabs.length = 0;
       this.edit = null;
       this.run(this.prog.clear, this.fbo[this.cur], this.W, this.H, {});
-      for (const f of this.pFbo) { gl.bindFramebuffer(gl.FRAMEBUFFER, f); gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, 0]); }
+      for (const L of this.levels) for (const f of L.pFbo) { gl.bindFramebuffer(gl.FRAMEBUFFER, f); gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, 0]); }
     }
 
     // ---------- edits from the CPU ----------
