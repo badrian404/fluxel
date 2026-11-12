@@ -1326,6 +1326,25 @@ void main() {
       return { id: a[0], temp: b[0] };
     }
 
+    // A block of cells for the Scope: element (object cells give their part), shade, temperature,
+    // and the object element when the cell belongs to an object. Synchronous, so small blocks only.
+    region(x0, y0, w, h) {
+      const gl = this.gl, n = w * h, a = new Uint32Array(n * 4), b = new Float32Array(n * 4);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo[this.cur]);
+      gl.readBuffer(gl.COLOR_ATTACHMENT0);
+      gl.readPixels(x0, y0, w, h, gl.RGBA_INTEGER, gl.UNSIGNED_INT, a);
+      gl.readBuffer(gl.COLOR_ATTACHMENT1);
+      gl.readPixels(x0, y0, w, h, gl.RGBA, gl.FLOAT, b);
+      const out = { id: new Uint16Array(n), shade: new Uint8Array(n), temp: new Float32Array(n), obj: new Uint16Array(n) };
+      const objs = new Map(this.bodies.map((o) => [o.id, o.el]));
+      for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
+        const k = j * w + i, g = (y0 + j) * this.W + x0 + i, part = this.maskBuf[g * 4];
+        if (part) { out.id[k] = part; out.shade[k] = this.maskBuf[g * 4 + 1]; out.temp[k] = 20; out.obj[k] = objs.get(this.bodyId[g]) || 0; }
+        else { out.id[k] = a[k * 4]; out.shade[k] = a[k * 4 + 1] & 255; out.temp[k] = b[k * 4]; }
+      }
+      return out;
+    }
+
     // ---------- objects ----------
     objectSize() { return Math.max(3, Math.round(Math.min(this.W, this.H) / 34)); }
 

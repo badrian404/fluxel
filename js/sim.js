@@ -621,6 +621,18 @@
     }
 
     // ---------- painting ----------
+    // A block of cells for the Scope (same layout as the GPU engine's region()).
+    region(x0, y0, w, h) {
+      const n = w * h, out = { id: new Uint16Array(n), shade: new Uint8Array(n), temp: new Float32Array(n), obj: new Uint16Array(n) };
+      const objs = new Map(this.bodies.map((o) => [o.id, o.el]));
+      for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
+        const k = j * w + i, g = (y0 + j) * this.W + x0 + i;
+        out.id[k] = this.type[g]; out.shade[k] = this.shade[g]; out.temp[k] = this.temp[g];
+        if (this.bodyId[g]) out.obj[k] = objs.get(this.bodyId[g]) || 0;
+      }
+      return out;
+    }
+
     paint(cx, cy, radius, elId, pvx, pvy, replace) {
       const W = this.W, H = this.H, e = EL[elId];
       const r2 = radius * radius;

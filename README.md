@@ -51,6 +51,7 @@ run much faster.
 | Tap an object | Pick it up; flick and release to throw |
 | Right-click | Erase |
 | Mouse wheel, `[` `]` | Brush size |
+| Tools → Scope, then tap or drag | Magnifier: zoomed view with a crosshair, what is under it, and a count of every particle in view (− / + or the mouse wheel to zoom) |
 | Space | Pause / play |
 | S | Step one frame |
 | V | Heat view |

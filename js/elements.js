@@ -147,6 +147,7 @@
   def('heat', { cat: 'Tools', state: S.TOOL, color: '#ff4b3a', vary: 0 });
   def('cool', { cat: 'Tools', state: S.TOOL, color: '#4bc8ff', vary: 0 });
   def('push', { label: 'Stir', cat: 'Tools', state: S.TOOL, color: '#b88cff', vary: 0 });
+  def('scope', { cat: 'Tools', state: S.TOOL, color: '#ffd166', vary: 0 }); // magnifier: inspects, never paints
 
   // Resolve string references to ids.
   const ref = (v) => (v == null ? -1 : Array.isArray(v) ? v.map((k) => id[k]) : id[v]);

@@ -126,7 +126,7 @@
       const [r, g, bl] = FX.hexRgb(e.color);
       b.style.color = r * 0.3 + g * 0.59 + bl * 0.11 > 150 ? '#111' : '#fff';
       b.textContent = e.label;
-      b.onclick = () => { current = e.id; buildPalette(); updateInfo(); };
+      b.onclick = () => { current = e.id; buildPalette(); updateInfo(); scopeShow(); };
       els.appendChild(b);
     }
   }
@@ -159,6 +159,7 @@
     canvas.setPointerCapture(e.pointerId);
     const c = toCell(e);
     pointer = { id: e.pointerId, x: c.x, y: c.y, lx: c.x, ly: c.y, erase: e.button === 2, grab: null };
+    if (current === ID.scope && !pointer.erase) { pointer.scope = true; scopeAim(c); return; }
     // Objects: tap one to pick it up and throw it; with an object selected, tap empty space to drop a new one.
     if (!pointer.erase && current !== ID.erase) {
       const cx = Math.round(c.x), cy = Math.round(c.y);
@@ -172,6 +173,7 @@
     const c = toCell(e);
     hover = c;
     if (!pointer || e.pointerId !== pointer.id) return;
+    if (pointer.scope) { scopeAim(c); return; }
     pointer.x = c.x; pointer.y = c.y;
     if (pointer.grab) pointer.grab.grab = { x: Math.round(c.x + pointer.ox), y: Math.round(c.y + pointer.oy) };
   });
@@ -183,7 +185,11 @@
   canvas.addEventListener('pointerup', end);
   canvas.addEventListener('pointercancel', end);
   canvas.addEventListener('pointerleave', () => { hover = null; });
-  canvas.addEventListener('wheel', (e) => { e.preventDefault(); setBrush(brush + (e.deltaY < 0 ? 1 : -1)); }, { passive: false });
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    if (current === ID.scope) scopeZoom(e.deltaY < 0 ? 1 : -1);
+    else setBrush(brush + (e.deltaY < 0 ? 1 : -1));
+  }, { passive: false });
 
   function setBrush(v) { brush = Math.max(0, Math.min(80, v)); $('#brushVal').textContent = brush + 1; $('#brush').value = brush; }
 
@@ -254,12 +260,105 @@
     fill(W * 0.64, H * 0.41, W * 0.73, H * 0.45, ID.gunpowder);
   }
 
+  // ---------- scope: a magnifier with a crosshair and a count of what is in view ----------
+  const ZOOMS = [9, 13, 17, 25, 33, 49, 65]; // cells across the lens (odd, so the crosshair sits on one cell)
+  const scope = { x: -1, y: -1, zi: 3, t: 0 };
+  const STATE_NAME = { [S.EMPTY]: 'air', [S.STATIC]: 'solid', [S.POWDER]: 'powder', [S.LIQUID]: 'liquid', [S.GAS]: 'gas', [S.FIRE]: 'fire', [S.TOOL]: 'tool', [S.BEAM]: 'energy', [S.OBJECT]: 'object' };
+  const RGB = EL.map((e) => FX.hexRgb(e.color));
+  const lens = $('#lens'), lctx = lens.getContext('2d');
+  const lensImg = { n: 0, c: document.createElement('canvas') };
+  function scopeShow() {
+    const on = current === ID.scope;
+    $('#scope').hidden = !on; $('#scopeBox').hidden = !on || scope.x < 0;
+    if (on && scope.x < 0 && world) scopeAim({ x: world.W / 2, y: world.H / 2 });
+  }
+  function scopeAim(c) {
+    if (!world) return;
+    scope.x = Math.max(0, Math.min(world.W - 1, Math.floor(c.x)));
+    scope.y = Math.max(0, Math.min(world.H - 1, Math.floor(c.y)));
+    scope.t = 0; // refresh on the next frame
+  }
+  function scopeZoom(d) { scope.zi = Math.max(0, Math.min(ZOOMS.length - 1, scope.zi + d)); scope.t = 0; }
+  $('#zoomIn').onclick = () => scopeZoom(-1); // fewer cells across = more magnified
+  $('#zoomOut').onclick = () => scopeZoom(1);
+  function cellColor(id, shade, t) {
+    if (id === 0) return [14, 16, 24];
+    const e = EL[id], [r0, g0, b0] = RGB[id];
+    const k = (((shade >> 3) / 31) * 2 - 1) * e.vary;
+    let r = r0 + k, g = g0 + k, b = b0 + k;
+    if (e.glow) { const q = Math.min(1.15, Math.max(0.3, (t - 700) / 900)); r *= q; g *= q * q; b *= q * q; }
+    else if (t > 400) { const h = Math.min(1, (t - 400) / 900); r += (255 - r) * h; g += (120 - g) * h * 0.6; b *= 1 - h; }
+    return [r, g, b];
+  }
+  function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]); }
+  function scopeUpdate() {
+    if (!world || scope.x < 0) return;
+    const n = ZOOMS[scope.zi], half = n >> 1, W = world.W, H = world.H;
+    scope.x = Math.min(scope.x, W - 1); scope.y = Math.min(scope.y, H - 1); // the grid can shrink
+    const x0 = scope.x - half, y0 = scope.y - half;
+    // Only the part inside the world is read; the rest of the lens is drawn as out of bounds.
+    const rx0 = Math.max(0, x0), ry0 = Math.max(0, y0), rx1 = Math.min(W, x0 + n), ry1 = Math.min(H, y0 + n);
+    const rw = rx1 - rx0, rh = ry1 - ry0;
+    const reg = world.region(rx0, ry0, rw, rh);
+    // Lens image: one pixel per cell, scaled up without smoothing.
+    if (lensImg.n !== n) { lensImg.n = n; lensImg.c.width = n; lensImg.c.height = n; lensImg.ctx = lensImg.c.getContext('2d'); lensImg.img = lensImg.ctx.createImageData(n, n); }
+    const d = lensImg.img.data, counts = new Map();
+    let total = 0;
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+      const o = (j * n + i) * 4, x = x0 + i, y = y0 + j;
+      let rgb = [7, 8, 11];
+      if (x >= rx0 && x < rx1 && y >= ry0 && y < ry1) {
+        const k = (y - ry0) * rw + (x - rx0), id = reg.id[k];
+        rgb = cellColor(id, reg.shade[k], reg.temp[k]);
+        const key = reg.obj[k] || id;
+        if (key) { total++; counts.set(key, (counts.get(key) || 0) + 1); }
+      }
+      d[o] = rgb[0]; d[o + 1] = rgb[1]; d[o + 2] = rgb[2]; d[o + 3] = 255;
+    }
+    lensImg.ctx.putImageData(lensImg.img, 0, 0);
+    const L = lens.width, cs = L / n;
+    lctx.imageSmoothingEnabled = false;
+    lctx.drawImage(lensImg.c, 0, 0, L, L);
+    // Grid lines when zoomed in far enough, then the crosshair around the centre cell.
+    if (cs >= 10) {
+      lctx.strokeStyle = 'rgba(0,0,0,0.25)'; lctx.lineWidth = 1; lctx.beginPath();
+      for (let k = 1; k < n; k++) { const v = Math.round(k * cs) + 0.5; lctx.moveTo(v, 0); lctx.lineTo(v, L); lctx.moveTo(0, v); lctx.lineTo(L, v); }
+      lctx.stroke();
+    }
+    const c0 = half * cs, mid = c0 + cs / 2;
+    lctx.strokeStyle = 'rgba(255,209,102,0.95)'; lctx.lineWidth = 2;
+    lctx.strokeRect(c0, c0, cs, cs);
+    lctx.beginPath();
+    lctx.moveTo(mid, 0); lctx.lineTo(mid, c0 - 2); lctx.moveTo(mid, c0 + cs + 2); lctx.lineTo(mid, L);
+    lctx.moveTo(0, mid); lctx.lineTo(c0 - 2, mid); lctx.moveTo(c0 + cs + 2, mid); lctx.lineTo(L, mid);
+    lctx.stroke();
+    // What is under the crosshair.
+    const ck = (scope.y - ry0) * rw + (scope.x - rx0), cid = reg.id[ck], cobj = reg.obj[ck], ce = EL[cid];
+    let html;
+    if (cobj) html = '<b>' + esc(EL[cobj].label) + '</b> · object<br>made of ' + esc(ce.label.toLowerCase());
+    else html = (cid ? '<b>' + esc(ce.label) + '</b> · ' + STATE_NAME[ce.state] : '<b>Nothing</b> · empty air') + '<br>' + Math.round(reg.temp[ck]) + ' °C';
+    $('#scopeCenter').innerHTML = html + ' <span style="color:var(--muted)">at ' + scope.x + ', ' + scope.y + '</span>';
+    // Counts of everything in view, most common first.
+    const cells = rw * rh;
+    $('#scopeSum').textContent = total + ' particle' + (total === 1 ? '' : 's') + ' in ' + n + '×' + n + ' · ' + counts.size + ' kind' + (counts.size === 1 ? '' : 's');
+    const rows = [...counts].sort((a, b) => b[1] - a[1]);
+    $('#scopeList').innerHTML = rows.map(([id, c]) => '<li><span class="sw" style="--c:' + EL[id].color + '"></span><span>' + esc(EL[id].label) + '</span><span class="n">' + c + '</span><span class="pc">' + Math.round((c * 100) / cells) + '%</span></li>').join('');
+    $('#zoomVal').textContent = n + '×' + n;
+    // Panel on the side away from the target; box on the stage around what the lens shows.
+    const dpr = layout.dpr || 1, sx = layout.scale / dpr;
+    const bx = (layout.ox / dpr) + x0 * sx, by = (layout.oy / dpr) + y0 * sx;
+    const box = $('#scopeBox');
+    box.hidden = false;
+    Object.assign(box.style, { left: bx + 'px', top: by + 'px', width: n * sx + 'px', height: n * sx + 'px' });
+    $('#scope').classList.toggle('left', scope.x > W * 0.55);
+  }
+
   // ---------- loop ----------
   let last = performance.now(), acc = 0, frames = 0, fpsT = last, simMs = 0;
   const STEP = 1000 / 60;
   function frame(now) {
     const dt = Math.min(100, now - last); last = now;
-    if (pointer && !pointer.grab) {
+    if (pointer && !pointer.grab && !pointer.scope) {
       const a = { x: pointer.lx, y: pointer.ly }, b = { x: pointer.x, y: pointer.y };
       paintLine(a, b, pointer.erase);
       pointer.lx = pointer.x; pointer.ly = pointer.y;
@@ -275,6 +374,7 @@
     simMs = simMs * 0.9 + (performance.now() - t0) * 0.1;
     if (renderer) renderer.draw(world, layout);
     else world.draw(layout, view);
+    if (current === ID.scope && now - scope.t > 100) { scope.t = now; scopeUpdate(); }
     frames++;
     if (now - fpsT > 500) {
       const fps = Math.round((frames * 1000) / (now - fpsT));
@@ -304,6 +404,7 @@
   setBrush(brush);
   createWorld();
   demo();
+  scopeShow();
   if (window.ResizeObserver) new ResizeObserver(() => fit()).observe(stage);
   else window.addEventListener('resize', fit);
   requestAnimationFrame(frame);

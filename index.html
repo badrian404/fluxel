@@ -41,7 +41,15 @@
       </label>
       <span class="stats"><span id="grid"></span> <span id="fps"></span> <span id="hover"></span></span>
     </header>
-    <main id="stage"><canvas id="screen"></canvas><div id="hint">Pick an element below, then drag to pour. Fling it for momentum. Grab objects to throw them. Right-click or the Erase tool removes.<button id="hintClose" aria-label="Dismiss">Got it</button></div></main>
+    <main id="stage"><canvas id="screen"></canvas><div id="hint">Pick an element below, then drag to pour. Fling it for momentum. Grab objects to throw them. Right-click or the Erase tool removes.<button id="hintClose" aria-label="Dismiss">Got it</button></div>
+      <div id="scopeBox" hidden></div>
+      <aside id="scope" hidden aria-label="Scope">
+        <div class="scope-head"><span>Scope</span><span class="scope-zoom"><button id="zoomOut" aria-label="Zoom out">−</button><span id="zoomVal"></span><button id="zoomIn" aria-label="Zoom in">+</button></span></div>
+        <canvas id="lens" width="240" height="240"></canvas>
+        <div id="scopeCenter"></div>
+        <div id="scopeSum"></div>
+        <ol id="scopeList"></ol>
+      </aside></main>
     <nav id="palette">
       <div id="cats"></div>
       <div id="els"></div>
