@@ -44,7 +44,7 @@
         this.igT[e.id] = e.igniteT == null ? Infinity : e.igniteT;
       }
       this.fixed = new Uint8Array(NEL); // cannot be pushed or destroyed by explosions
-      for (const k of ['wall', 'cloner', 'drain', 'void', 'heater', 'cooler']) this.fixed[ID[k]] = 1;
+      for (const k of ['wall', 'cloner', 'drain', 'void', 'heater', 'cooler', 'spout']) this.fixed[ID[k]] = 1;
 
       // Chunks of 32x32 cells sleep when nothing in them changed last step.
       const CS = 32, ccw = (this.ccw = Math.ceil(W / CS)), cch = (this.cch = Math.ceil(H / CS));
@@ -63,11 +63,12 @@
         // Only the first element of a reaction pair needs ticking; the check looks both ways.
         for (let b = 0; b < NEL; b++) if (RX[e.id * NEL + b]) { this.reactive[e.id] = 1; break; }
       }
-      for (const k of ['cloner', 'drain', 'void', 'heater', 'cooler', 'plant', 'fire', 'plasma']) this.reactive[ID[k]] = 1;
+      for (const k of ['cloner', 'drain', 'void', 'heater', 'cooler', 'spout', 'plant', 'fire', 'plasma']) this.reactive[ID[k]] = 1;
 
       const scale = Math.max(2, Math.round(W / 110));
       this.fluid = new FX.Fluid(W, H, scale);
       this.count = 0;
+      this.spoutLiquid = ID.water; // what newly painted spouts pour
       this.initBodies();
     }
 
@@ -597,6 +598,10 @@
                 this.set(j, held);
                 if (r === 2) this.vy[j] = 0.5;
               }
+            } else if (a === ID.spout) {
+              // Pours its liquid (kept in life) into the empty cell below it.
+              const k = y < this.H - 1 ? i + W : -1;
+              if (k >= 0 && this.life[i] && type[k] === 0 && rnd() < 0.5) { this.set(k, this.life[i]); this.vy[k] = 1; }
             } else if (a === ID.drain || a === ID.void) {
               // Swallow from every side: Drain takes liquids, Void takes anything that moves.
               for (let q = 0; q < 4; q++) {
@@ -675,6 +680,7 @@
             if (rnd() < 0.35) continue; // sprinkle, looks more natural
           }
           this.set(i, elId);
+          if (elId === ID.spout) this.life[i] = this.spoutLiquid;
           if (e.state !== STATIC) { this.vx[i] = pvx * 0.3; this.vy[i] = pvy * 0.3; }
         }
       }

@@ -28,7 +28,9 @@ Play it by opening `index.html` (no build step), or host the folder on GitHub Pa
 
 Powders, liquids, solids, gases, energy (fire, plasma, laser, freeze ray, lightning), food that cooks,
 melts and mixes (flour + water makes dough, dough bakes into bread, sugar caramelises, popcorn pops),
-and special blocks: cloner, drain (removes liquids), void (removes anything that moves), heater and cooler.
+and special blocks: cloner, drain (removes liquids), void (removes anything that moves), heater, cooler
+and spout (pours a liquid of your choice out of its bottom; pick the liquid in the **Pours** row that appears when Spout is selected,
+and each spout keeps the liquid it was placed with).
 Laser and freeze ray shoot in the direction you drag; lightning strikes downward.
 
 Objects (tennis ball, rubber duck, beach ball, crate, bowling ball) move as one piece: they bounce,

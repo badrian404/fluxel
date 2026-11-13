@@ -43,6 +43,9 @@
   let paused = false, stepOnce = false;
   let current = ID.water, brush = 4, replace = false;
   let qualityKey = 'auto', autoPick = null;
+  // The liquid new spouts pour: any liquid in the palette.
+  const POURABLE = EL.filter((e) => e.state === S.LIQUID && !e.hidden);
+  let spoutLiquid = ID.water;
 
   // ---------- quality ----------
   function benchmark() {
@@ -90,6 +93,7 @@
       world = new FX.World(W, H);
       renderer.resize(world);
     }
+    world.spoutLiquid = spoutLiquid;
     setBrush(Math.max(2, Math.round(Math.max(W, H) / 64)));
     fit();
     updateInfo();
@@ -129,6 +133,32 @@
       b.onclick = () => { current = e.id; buildPalette(); updateInfo(); scopeShow(); };
       els.appendChild(b);
     }
+    // With the spout picked, a row of liquids to choose what it pours.
+    const pours = $('#pours');
+    pours.hidden = current !== ID.spout;
+    pours.innerHTML = '';
+    if (current === ID.spout) {
+      const lab = document.createElement('span');
+      lab.className = 'pours-label';
+      lab.textContent = 'Pours';
+      pours.appendChild(lab);
+      for (const e of POURABLE) {
+        const b = document.createElement('button');
+        b.className = 'liq' + (e.id === spoutLiquid ? ' on' : '');
+        b.style.setProperty('--c', e.color);
+        b.setAttribute('aria-pressed', e.id === spoutLiquid);
+        b.innerHTML = '<span class="sw"></span>';
+        b.append(e.label);
+        b.onclick = () => setSpoutLiquid(e.id);
+        pours.appendChild(b);
+      }
+    }
+  }
+  function setSpoutLiquid(id) {
+    spoutLiquid = id;
+    if (world) world.spoutLiquid = id;
+    store.set('spout', EL[id].key);
+    buildPalette();
   }
 
   // ---------- input ----------
@@ -400,6 +430,8 @@
   const saved = store.get('quality');
   if (saved && (saved === 'auto' || QUALITY[saved])) qualityKey = saved;
   qSel.value = qualityKey;
+  const savedSpout = ID[store.get('spout')];
+  if (savedSpout && POURABLE.some((e) => e.id === savedSpout)) spoutLiquid = savedSpout;
   buildPalette();
   setBrush(brush);
   createWorld();

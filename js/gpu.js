@@ -50,7 +50,7 @@
 
   // ---------- element tables ----------
   const stateNum = (st) => (st === S.TOOL || st === S.OBJECT ? S.STATIC : st);
-  const FIXED = new Set(['wall', 'cloner', 'drain', 'void', 'heater', 'cooler']);
+  const FIXED = new Set(['wall', 'cloner', 'drain', 'void', 'heater', 'cooler', 'spout']);
   function slots(v) {
     if (v == null || v === -1) return [-1, -1, -1, -1];
     if (!Array.isArray(v)) return [v, v, v, v];
@@ -479,6 +479,7 @@ void main() {
         if (n < 0) continue;
         if (nA[k].w > 0u && n != ID_WATER && rk[k] < 0.0875) { setCell(A, B, ID_FIRE, r1); B.z = -0.5; break; }
         if (n == ID_CLONER && nA[k].z > 0u && rk[k] < 0.125) { setCell(A, B, int(nA[k].z), r1); if (k == 3) B.z = 0.5; break; }
+        if (n == ID_SPOUT && k == 3 && nA[k].z > 0u && rk[k] < 0.5) { setCell(A, B, int(nA[k].z), r1); B.z = 1.0; break; } // a spout above pours into us
         if (n == ID_PLANT && rk[k] < (k == 2 ? 0.000375 : 0.0001125)) { setCell(A, B, ID_PLANT, r1); break; }
       }
     } else {
@@ -854,6 +855,7 @@ uniform float uR2;
 uniform int uElId;
 uniform int uRep;
 uniform int uKind; // 0 material, 1 erase, 2 heat, 3 cool, 4 stir, 5 beam
+uniform int uSpout; // the liquid a painted spout pours
 void main() {
   ivec2 p = ivec2(gl_FragCoord.xy);
   uvec4 A = texelFetch(uA, p, 0);
@@ -883,6 +885,7 @@ void main() {
     int es = stOf(uElId);
     if (movableSt(es) && r.y < 0.35) return; // sprinkle, looks more natural
     setCell(A, B, uElId, r);
+    if (uElId == ID_SPOUT) A.z = uint(uSpout);
     if (es != ST_STATIC) B.yz = pv * 0.3;
   }
   oA = A; oB = B;
@@ -946,6 +949,7 @@ void main() {
     if (id == ID_FIRE) s = float(pcg3d(uvec3(uvec2(p), uint(uFlick))).x >> 27u);
     float k = (s / 31.0 * 2.0 - 1.0) * col.w;
     c = clamp(id == ID_FIRE ? vec3(col.r, col.g + k * 1.6, col.b) : col.rgb + k, 0.0, 255.0);
+    if (id == ID_SPOUT && A.z > 0u) c = mix(c, el(int(A.z), 8).rgb, 0.45); // tinted by what it pours
     int st = stOf(id);
     float t = B.x;
     bool glow = el(id, 7).z > 0.5;
@@ -1038,6 +1042,7 @@ void main() {
       this.frame = 1;
       this.flick = 0;
       this.count = null;
+      this.spoutLiquid = ID.water; // what newly painted spouts pour
       const SC = (this.S = Math.max(2, Math.round(W / 320)));
       const cw = (this.cw = Math.ceil(W / SC)), ch = (this.ch = Math.ceil(H / SC));
       this.gravity = 0.2; this.flip = 0.95; this.maxSpeed = 5; this.fillPull = 0.6;
@@ -1281,9 +1286,9 @@ void main() {
       if (this.bodies.length && (e.key === 'erase' || e.key === 'push')) this.paintBodies(cx, cy, radius, e.key, pvx, pvy);
       if (e.state === S.OBJECT) return;
       const kind = e.key === 'erase' ? 1 : e.key === 'heat' ? 2 : e.key === 'cool' ? 3 : e.key === 'push' ? 4 : e.state === S.BEAM ? 5 : 0;
-      const key = elId + ':' + radius + ':' + (replace ? 1 : 0);
+      const key = elId + ':' + radius + ':' + (replace ? 1 : 0) + ':' + this.spoutLiquid;
       if (this.dabKey !== key || this.dabs.length >= MAX_DABS) { this.flushDabs(); this.dabKey = key; }
-      this.dabParams = { r2: radius * radius, el: elId, rep: replace ? 1 : 0, kind };
+      this.dabParams = { r2: radius * radius, el: elId, rep: replace ? 1 : 0, kind, spout: this.spoutLiquid };
       this.dabs.push(cx, cy, pvx, pvy);
       if (kind === 5) this.beamUntil = this.frame + Math.ceil((this.W + this.H) / BEAM_PASSES) + 60;
     }
@@ -1294,7 +1299,7 @@ void main() {
       const arr = new Float32Array(MAX_DABS * 4);
       arr.set(this.dabs);
       const d = this.dabParams;
-      this.statePass(this.prog.brush, { uDabs: arr, uN: n, uR2: d.r2, uElId: d.el, uRep: d.rep, uKind: d.kind });
+      this.statePass(this.prog.brush, { uDabs: arr, uN: n, uR2: d.r2, uElId: d.el, uRep: d.rep, uKind: d.kind, uSpout: d.spout });
       this.dabs.length = 0;
     }
 
