@@ -141,6 +141,7 @@
   def('void', { cat: 'Special', color: '#0a0610', vary: 3, cond: 0, density: 99999 }); // swallows anything that moves
   def('heater', { cat: 'Special', color: '#c8463a', vary: 4, temp: 600, cond: 0.6, density: 99999 });
   def('cooler', { cat: 'Special', color: '#3a7ec8', vary: 4, temp: -60, cond: 0.6, density: 99999 });
+  def('spout', { cat: 'Special', color: '#4a505a', vary: 3, cond: 0, density: 99999 }); // pours the liquid picked for it out of its bottom
 
   // ---------- Tools ----------
   def('erase', { cat: 'Tools', state: S.TOOL, color: '#e8e8e8', vary: 0 });

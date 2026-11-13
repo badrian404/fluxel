@@ -56,9 +56,9 @@
     }
 
     draw(world, layout) {
-      const { W, H, type, temp, vx, vy, shade, burn, stateOf } = world;
+      const { W, H, type, temp, vx, vy, shade, burn, stateOf, life } = world;
       const buf = this.buf, bg = this.bg, heat = this.view === 'heat';
-      const LIQ = S.LIQUID, FIRE_ID = ID.fire, flick = (Math.random() * 1e6) | 0;
+      const LIQ = S.LIQUID, FIRE_ID = ID.fire, SPOUT = ID.spout, flick = (Math.random() * 1e6) | 0;
       if (!this.depth || this.depth.length !== W) this.depth = new Int16Array(W);
       const depth = this.depth; depth.fill(0);
       for (let y = 0; y < H; y++) {
@@ -104,6 +104,10 @@
               r += (255 - r) * f; g += (140 - g) * f; b *= 1 - f;
             }
             buf[i] = pack(r, g, b);
+          } else if (a === SPOUT && life[i]) {
+            // Tinted by what it pours.
+            const l = life[i] * SHADES + 16;
+            buf[i] = pack(palR[idx] * 0.55 + palR[l] * 0.45, palG[idx] * 0.55 + palG[l] * 0.45, palB[idx] * 0.55 + palB[l] * 0.45);
           } else {
             buf[i] = pal[idx];
           }
